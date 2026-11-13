@@ -11,7 +11,7 @@ typedef struct {
 /** 左右轮映射及右轮反向设置。 */
 static const motor_pwm_binding_t motor_pwm_bindings[MOTOR_COUNT] = {
     {TIM_CHANNEL_1, TIM_CHANNEL_2, +1}, /* 左轮：PB6/PB7。 */
-    {TIM_CHANNEL_3, TIM_CHANNEL_4, -1}, /* 右轮：PB8/PB9。 */
+    {TIM_CHANNEL_3, TIM_CHANNEL_4, +1}, /* 右轮：PB8/PB9。 */
 };
 
 /**写入期间暂停更新事件，避免两个新值在不同 PWM 周期生效。 */

@@ -46,7 +46,12 @@ add_executable(${CMAKE_PROJECT_NAME}
         app/Inc/chassis_config.h
         bsp/Inc/motor_types.h
         bsp/Src/gettick.c
-        bsp/Inc/gettick.h)
+        bsp/Inc/gettick.h
+        bsp/Src/bsp_line_sensor.c
+        bsp/Inc/bsp_line_sensor.h
+        app/Src/app_line_follow.c
+        app/Inc/app_line_follow.h
+        app/Inc/line_follow_config.h)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)

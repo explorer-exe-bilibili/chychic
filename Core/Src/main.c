@@ -24,8 +24,10 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "chassis.h"
+#include "app_line_follow.h"
 #include "chassis_config.h"
 #include "gettick.h"
+#include "bsp_motor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -97,6 +99,8 @@ int main(void)
   {
     Error_Handler();
   }
+  app_line_follow_init();
+  /* 默认上电不循迹；确认极性和顺序后，由主循环调用 app_line_follow_start() 启动。 */
   /* last_control_tick_ms：上次采样时刻，毫秒；启动后目标默认为零。 */
   uint32_t last_control_tick_ms = Get_tick();
   /* USER CODE END 2 */
@@ -114,6 +118,8 @@ int main(void)
     if (elapsed_ms >= CHASSIS_CONTROL_PERIOD_MS)
     {
       last_control_tick_ms = current_tick_ms;
+      /* 先由循迹模块设置目标，再统一测速、推进斜坡并输出电机 PWM。 */
+      app_line_follow_update(elapsed_ms);
       chassis_update(elapsed_ms);
     }
   }
