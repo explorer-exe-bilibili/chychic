@@ -1,25 +1,54 @@
-//
-// Created by moonrise on 2026/11/12.
-//
 #include "motor_speed.h"
 #include "bsp_motor_encoder.h"
+#include "chassis_config.h"
+#include <stddef.h>
 
-wheel_t wheel[2];
+/* motor_feedback：本模块私有的双轮反馈，外部仅能获得副本。 */
+static motor_feedback_t motor_feedback[MOTOR_COUNT];
 
-void odom_update(uint32_t dt_ms)
-{
-    if (dt_ms == 0) return;                     /* 防除零 */
+bool motor_speed_init(void) {
+    if (!bsp_encoder_init()) {
+        return false;
+    }
+    motor_speed_reset();
+    return true;
+}
 
-    for (uint8_t i = 0; i < 2; i++) {
-        wheel[i].d_counts      = encoder_get_delta(i);
-        wheel[i].total_counts += wheel[i].d_counts;
-
-        /* v = 位移 / 时间，单位 mm/s */
-        wheel[i].velocity_raw = wheel[i].d_counts * MM_PER_COUNT * 1000.0f / (float)dt_ms;
-
-        /* 一阶低通：alpha 越大越灵敏，0.3 对应约 30ms 时间常数 */
-        wheel[i].velocity += (wheel[i].velocity_raw - wheel[i].velocity) * 0.3f;
+void motor_speed_update(uint32_t dt_ms) {
+    if (dt_ms == 0U) {
+        return;
+    }
+    float elapsed_ms = (float)dt_ms;
+    float filter_alpha = elapsed_ms / (MOTOR_SPEED_FILTER_TIME_CONSTANT_MS + elapsed_ms);
+    for (motor_id_t motor_id = MOTOR_LEFT; motor_id < MOTOR_COUNT; ++motor_id) {
+        motor_feedback_t *feedback = &motor_feedback[motor_id];
+        feedback->delta_counts = bsp_encoder_read_delta(motor_id);
+        feedback->total_counts += feedback->delta_counts;
+        feedback->raw_speed_mm_s =
+            (float)feedback->delta_counts * MOTOR_DISTANCE_PER_COUNT_MM * 1000.0f / elapsed_ms;//计算原始轮速
+        feedback->filtered_speed_mm_s +=
+            filter_alpha * (feedback->raw_speed_mm_s - feedback->filtered_speed_mm_s);//更新滤波轮速
     }
 }
 
-float wheel_total_mm(uint8_t i) { return wheel[i].total_counts * MM_PER_COUNT; }
+bool motor_speed_get_feedback(motor_id_t motor_id, motor_feedback_t *feedback) {
+    if ((unsigned int)motor_id >= MOTOR_COUNT || feedback == NULL) {
+        return false;
+    }
+    *feedback = motor_feedback[motor_id];
+    return true;
+}//复制已经保存的反馈
+
+float motor_speed_get_distance_mm(motor_id_t motor_id) {
+    if ((unsigned int)motor_id >= MOTOR_COUNT) {
+        return 0.0f;
+    }
+    return (float)motor_feedback[motor_id].total_counts * MOTOR_DISTANCE_PER_COUNT_MM;
+}
+
+void motor_speed_reset(void) {
+    for (motor_id_t motor_id = MOTOR_LEFT; motor_id < MOTOR_COUNT; ++motor_id) {
+        (void)bsp_encoder_read_delta(motor_id);
+        motor_feedback[motor_id] = (motor_feedback_t){0};
+    }
+}

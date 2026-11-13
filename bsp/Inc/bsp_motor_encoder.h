@@ -1,18 +1,18 @@
-//
-// Created by moonrise on 2026/11/12.
-//
+#ifndef BSP_MOTOR_ENCODER_H
+#define BSP_MOTOR_ENCODER_H
 
-#ifndef CHYCHIC_PROJECT_BSP_MOTOR_ENCODER_H
-#define CHYCHIC_PROJECT_BSP_MOTOR_ENCODER_H
+#include "motor_types.h"
+#include <stdbool.h>
 #include <stdint.h>
 
-#define ENC_LEFT   0
-#define ENC_RIGHT  1
+/**两个编码器启动成功为 true，否则为 false。*/
+bool bsp_encoder_init(void);
 
-void    encoder_init(void);
-int32_t encoder_get_delta(uint8_t id);   /* 自上次调用以来的增量（带符号） */
-int32_t encoder_get_total(uint8_t id);   /* 上电至今累计位置（带符号） */
-void    encoder_reset_total(uint8_t id);
-void    encoder_set_sign(uint8_t id, int8_t sign);  /* +1 / -1，用来纠正接反的轮子 */
+/**
+ * motor_id：左右轮编号。返回：计数增量，无效编号返回 0。
+ * 仅供 motor_speed 模块采样；
+ * 要求 ARR=65535
+ */
+int32_t bsp_encoder_read_delta(motor_id_t motor_id);
 
-#endif //CHYCHIC_PROJECT_BSP_MOTOR_ENCODER_H
+#endif

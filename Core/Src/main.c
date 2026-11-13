@@ -23,7 +23,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "chassis.h"
+#include "chassis_config.h"
+#include "gettick.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -91,7 +93,12 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
-
+  if (!chassis_init())
+  {
+    Error_Handler();
+  }
+  /* last_control_tick_ms：上次采样时刻，毫秒；启动后目标默认为零。 */
+  uint32_t last_control_tick_ms = Get_tick();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -101,6 +108,14 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    /* 无符号差值可跨 HAL tick 回绕；超期只更新一次，传入实际经过时间。 */
+    uint32_t current_tick_ms = Get_tick();
+    uint32_t elapsed_ms = current_tick_ms - last_control_tick_ms;
+    if (elapsed_ms >= CHASSIS_CONTROL_PERIOD_MS)
+    {
+      last_control_tick_ms = current_tick_ms;
+      chassis_update(elapsed_ms);
+    }
   }
   /* USER CODE END 3 */
 }

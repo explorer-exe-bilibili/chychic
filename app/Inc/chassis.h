@@ -1,36 +1,44 @@
-//
-// Created by moonrise on 2026/11/12.
-//
-
 #ifndef CHASSIS_H
 #define CHASSIS_H
+
+#include <stdbool.h>
 #include <stdint.h>
 
-/* ====== 机械参数（实测） ====== */
-#define TRACK_WIDTH_MM      150.0f   /* 左右轮中心距 mm */
-#define MAX_WHEEL_MMPS      600.0f   /* 单轮满速 mm/s */
+/**
+ * chassis_init：启动电机与编码器，清零速度目标和反馈。
+ * 返回：成功为 true；失败保持零输出并返回 false。
+ * 所有接口由同一个主循环上下文调用。
+ */
+bool chassis_init(void);
 
-/* ====== PWM 参数 ====== */
-#define PWM_ARR             999      /* 必须等于 TIM4->ARR */
-#define DUTY_MAX            (PWM_ARR + 1)      /* = 1000，千分比满量程 */
-#define DUTY_DEAD_L         180      /* 左轮死区，实测 */
-#define DUTY_DEAD_R         180      /* 右轮死区，与左轮独立 */
+/**
+ * chassis_set_wheel_speeds：设置左右轮目标线速度，等比限幅后保存。
+ * left_speed_mm_s/right_speed_mm_s：单位毫米/秒，向前滚动为正。
+ */
+void chassis_set_wheel_speeds(float left_speed_mm_s, float right_speed_mm_s);
 
-/* ====== 运动参数 ====== */
-#define ACCEL_MMPS2         6000.0f  /* 加速度上限 mm/s² */
-#define RIGHT_MOTOR_INVERT  1        /* 右轮接反则设 1 */
+/**
+ * chassis_set_velocity：将车体线速度和角速度解算为左右轮目标。
+ * linear_speed_mm_s：前进为正，毫米/秒；angular_speed_rad_s：俯视逆时针为正，单位弧度/秒。
+ */
+void chassis_set_velocity(float linear_speed_mm_s, float angular_speed_rad_s);
 
-void chassis_init(void);
-void chassis_update(uint32_t dt_ms);          /* 每 10ms 调一次 */
-void chassis_set_wheel(float v_l, float v_r); /* mm/s，带符号 */
-void chassis_move(float v_mmps, float w_radps);
-void chassis_brake(void);                     /* 软停：斜坡减速 */
-void chassis_stop_now(void);                  /* 急停：立即断输出 */
+/**
+ * chassis_update：先采样反馈，再执行指令斜坡和电机控制。
+ * dt_ms：距上次更新的实际毫秒数；0 或未成功初始化时不执行。返回：无。
+ */
+void chassis_update(uint32_t dt_ms);
 
-/* 语义别名：只做薄封装，不写任何新逻辑 */
-static inline void chassis_forward (float v) { chassis_move( v, 0.0f); }
-static inline void chassis_backward(float v) { chassis_move(-v, 0.0f); }
-static inline void chassis_spin    (float w) { chassis_move(0.0f, w); }
-static inline void chassis_arc     (float v, float w) { chassis_move(v, w); }
+/**
+ * chassis_request_stop：将目标设为零，通过后续 update 按斜坡减速。
+ * 参数：无。返回：无。此接口不表示电机驱动芯片的主动刹车模式。
+ */
+void chassis_request_stop(void);
+
+/**
+ * chassis_stop：清零目标、斜坡状态和 PWM 指令，不等待斜坡。
+ * 参数：无。返回：无。PWM 在下个更新事件生效，机械停车仍受惯性影响。
+ */
+void chassis_stop(void);
 
 #endif

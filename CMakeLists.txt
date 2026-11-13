@@ -42,7 +42,11 @@ add_executable(${CMAKE_PROJECT_NAME}
         bsp/Src/bsp_motor_encoder.c
         bsp/Inc/bsp_motor_encoder.h
         app/Src/chassis.c
-        app/Inc/chassis.h)
+        app/Inc/chassis.h
+        app/Inc/chassis_config.h
+        bsp/Inc/motor_types.h
+        bsp/Src/gettick.c
+        bsp/Inc/gettick.h)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)

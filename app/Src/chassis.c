@@ -1,87 +1,94 @@
-//
-// Created by moonrise on 2026/11/12.
-//
-
-#include "../Inc/chassis.h"
 #include "chassis.h"
-#include "bsp_motor.h"
+#include "app_motor.h"
+#include "chassis_config.h"
+#include "motor_speed.h"
 #include <math.h>
 
-static float s_tgt_l = 0.0f, s_tgt_r = 0.0f;   /* 目标速度 mm/s */
-static float s_out_l = 0.0f, s_out_r = 0.0f;   /* 斜坡后指令 mm/s */
+/* target_wheel_speed_mm_s：解算和限幅后的目标轮速，单位毫米/秒。 */
+static float target_wheel_speed_mm_s[MOTOR_COUNT];
+/* ramped_wheel_speed_mm_s：经过加速度限制的轮速指令，单位毫米/秒。 */
+static float ramped_wheel_speed_mm_s[MOTOR_COUNT];
+static bool chassis_initialized; /* 电机和编码器是否均已成功启动。 */
 
-void chassis_init(void)
-{
-    s_tgt_l = s_tgt_r = 0.0f;
-    s_out_l = s_out_r = 0.0f;
-    left_motor_set_speed(0);
-    right_motor_set_speed(0);
-}
-
-/* mm/s → 占空比（开环 + 死区补偿）；上 PID 时只替换这一个函数 */
-static int32_t mmps_to_duty(float v_mmps, int32_t dead)
-{
-    if (v_mmps >  MAX_WHEEL_MMPS) v_mmps =  MAX_WHEEL_MMPS;   /* ① 饱和 */
-    if (v_mmps < -MAX_WHEEL_MMPS) v_mmps = -MAX_WHEEL_MMPS;
-
-    float mag = (v_mmps >= 0.0f) ? v_mmps : -v_mmps;          /* ② 幅值 */
-    if (mag < 1.0f) return 0;                                 /* ③ 死区下沿 */
-
-    int32_t duty = dead +                                     /* ④ 线性映射 */
-        (int32_t)((DUTY_MAX - dead) * mag / MAX_WHEEL_MMPS + 0.5f);
-    return (v_mmps >= 0.0f) ? duty : -duty;                   /* ⑤ 还原符号 */
-}
-
-void chassis_set_wheel(float v_l, float v_r)
-{
-    /* 等比缩放：保持 v:ω 比例，避免限幅扭曲转弯半径 */
-    float m = fmaxf(fabsf(v_l), fabsf(v_r));
-    if (m > MAX_WHEEL_MMPS) {
-        float k = MAX_WHEEL_MMPS / m;
-        v_l *= k;
-        v_r *= k;
+/**
+ * chassis_ramp_speed：将一个轮子的指令向目标推进，单次变化不超过 max_step_mm_s。
+ * current_speed_mm_s：当前指令；target_speed_mm_s：目标；max_step_mm_s：本周期上限。
+ * 返回：新的轮速指令，单位毫米/秒。
+ */
+static float chassis_ramp_speed(float current_speed_mm_s, float target_speed_mm_s,
+                                float max_step_mm_s) {
+    float speed_difference_mm_s = target_speed_mm_s - current_speed_mm_s;
+    if (speed_difference_mm_s > max_step_mm_s) {
+        speed_difference_mm_s = max_step_mm_s;
+    } else if (speed_difference_mm_s < -max_step_mm_s) {
+        speed_difference_mm_s = -max_step_mm_s;
     }
-    s_tgt_l = v_l;
-    s_tgt_r = v_r;
+    return current_speed_mm_s + speed_difference_mm_s;
 }
 
-void chassis_move(float v_mmps, float w_radps)
-{
-    float half = w_radps * TRACK_WIDTH_MM * 0.5f;   /* 单位 mm/s */
-    chassis_set_wheel(v_mmps - half, v_mmps + half);
+bool chassis_init(void) {
+    chassis_initialized = false;
+    for (motor_id_t motor_id = MOTOR_LEFT; motor_id < MOTOR_COUNT; ++motor_id) {
+        target_wheel_speed_mm_s[motor_id] = 0.0f;
+        ramped_wheel_speed_mm_s[motor_id] = 0.0f;
+    }
+    if (!app_motor_init() || !motor_speed_init()) {
+        app_motor_stop();
+        return false;
+    }
+    chassis_initialized = true;
+    return true;
 }
 
-void chassis_brake(void)      { s_tgt_l = s_tgt_r = 0.0f; }
-
-void chassis_stop_now(void)
-{
-    s_tgt_l = s_tgt_r = 0.0f;
-    s_out_l = s_out_r = 0.0f;
-    left_motor_set_speed(0);
-    right_motor_set_speed(0);
+void chassis_set_wheel_speeds(float left_speed_mm_s, float right_speed_mm_s) {
+    if (!isfinite(left_speed_mm_s) || !isfinite(right_speed_mm_s)) {
+        chassis_stop();
+        return;
+    }//输入限制
+    float largest_speed_mm_s = fmaxf(fabsf(left_speed_mm_s), fabsf(right_speed_mm_s));
+    if (largest_speed_mm_s > CHASSIS_MAX_WHEEL_SPEED_MM_S) {
+        float scale_factor = CHASSIS_MAX_WHEEL_SPEED_MM_S / largest_speed_mm_s;
+        left_speed_mm_s *= scale_factor;
+        right_speed_mm_s *= scale_factor;
+    }
+    target_wheel_speed_mm_s[MOTOR_LEFT] = left_speed_mm_s;
+    target_wheel_speed_mm_s[MOTOR_RIGHT] = right_speed_mm_s;
+}
+/* chassis_set_velocity：将线速度和角速度解算为左右轮目标速度。 */
+void chassis_set_velocity(float linear_speed_mm_s, float angular_speed_rad_s) {
+    float turn_speed_offset_mm_s = angular_speed_rad_s * CHASSIS_TRACK_WIDTH_MM * 0.5f;
+    chassis_set_wheel_speeds(linear_speed_mm_s - turn_speed_offset_mm_s,
+                             linear_speed_mm_s + turn_speed_offset_mm_s);
+}
+/** chassis_update：主循环调用，更新轮速采样、斜坡处理和电机输出。
+ * dt_ms：距上次采样的实际毫秒数，0 时不更新。返回：无。
+ */
+void chassis_update(uint32_t dt_ms) {
+    if (!chassis_initialized || dt_ms == 0U) {
+        return;
+    }
+    motor_speed_update(dt_ms);
+    float max_step_mm_s = CHASSIS_MAX_ACCELERATION_MM_S2 * (float)dt_ms / 1000.0f;
+    for (motor_id_t motor_id = MOTOR_LEFT; motor_id < MOTOR_COUNT; ++motor_id)
+    {
+        ramped_wheel_speed_mm_s[motor_id] = chassis_ramp_speed(
+            ramped_wheel_speed_mm_s[motor_id], target_wheel_speed_mm_s[motor_id], max_step_mm_s);
+    }
+    app_motor_update(ramped_wheel_speed_mm_s[MOTOR_LEFT], ramped_wheel_speed_mm_s[MOTOR_RIGHT],dt_ms);
 }
 
-void chassis_update(uint32_t dt_ms)
-{
-    if (dt_ms == 0) return;
+void chassis_request_stop(void) {
+    chassis_set_wheel_speeds(0.0f, 0.0f);
+}
 
-    float max_step = ACCEL_MMPS2 * (float)dt_ms / 1000.0f;   /* 每拍允许的变化量 */
-
-    float dl = s_tgt_l - s_out_l;
-    if (dl >  max_step) dl =  max_step;
-    if (dl < -max_step) dl = -max_step;
-    s_out_l += dl;
-
-    float dr = s_tgt_r - s_out_r;
-    if (dr >  max_step) dr =  max_step;
-    if (dr < -max_step) dr = -max_step;
-    s_out_r += dr;
-
-    int32_t duty_l =  mmps_to_duty(s_out_l, DUTY_DEAD_L);
-    int32_t duty_r =  mmps_to_duty(s_out_r, DUTY_DEAD_R);
-#if RIGHT_MOTOR_INVERT
-    duty_r = -duty_r;
-#endif
-    left_motor_set_speed(duty_l);
-    right_motor_set_speed(duty_r);
+void chassis_stop(void) {
+    for (motor_id_t motor_id = MOTOR_LEFT; motor_id < MOTOR_COUNT; ++motor_id)
+    {
+        target_wheel_speed_mm_s[motor_id] = 0.0f;
+        ramped_wheel_speed_mm_s[motor_id] = 0.0f;
+    }
+    if (chassis_initialized)
+    {
+        app_motor_stop();
+    }
 }

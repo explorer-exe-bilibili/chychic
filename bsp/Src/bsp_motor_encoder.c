@@ -1,46 +1,41 @@
-//
-// Created by moonrise on 2026/11/12.
-//
-
 #include "bsp_motor_encoder.h"
-#include "tim.h"     /* htim2 / htim3 */
+#include "tim.h"
+
 
 typedef struct {
-    TIM_HandleTypeDef *htim;
-    uint16_t last_cnt;
-    int32_t  total;
-    int32_t  delta;
-    int8_t   sign;          /* 右轮接反了就设 -1，不用拆线 */
-} encoder_t;
+    TIM_HandleTypeDef *timer_handle; /* 编码器使用的定时器句柄。 */
+    uint16_t previous_count;         /* 上次采样时的 16 位计数。 */
+    int32_t direction_sign;          /* 反馈方向修正，与电机驱动方向独立标定。 */
+} encoder_state_t;
 
-static encoder_t enc[2] = {
-    { &htim3, 0, 0, 0, +1 },   /* 左轮 PA6/PA7 → TIM3 */
-    { &htim2, 0, 0, 0, +1 },   /* 右轮 PA0/PA1 → TIM2 */
+static encoder_state_t encoder_states[MOTOR_COUNT] = {
+    {&htim3, 0, +1}, /* 左轮：TIM3 CH1/CH2，PB4/PB5，部分重映射。 */
+    {&htim2, 0, +1}, /* 右轮：TIM2 CH1/CH2，PA0/PA1。 */
 };
 
-void encoder_init(void)
-{
-    HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
-    HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
-
-    enc[ENC_LEFT ].last_cnt = (uint16_t)__HAL_TIM_GET_COUNTER(enc[ENC_LEFT ].htim);
-    enc[ENC_RIGHT].last_cnt = (uint16_t)__HAL_TIM_GET_COUNTER(enc[ENC_RIGHT].htim);
+bool bsp_encoder_init(void) {
+    for (motor_id_t motor_id = MOTOR_LEFT; motor_id < MOTOR_COUNT; ++motor_id) {
+        encoder_state_t *encoder_state = &encoder_states[motor_id];
+        if (__HAL_TIM_GET_AUTORELOAD(encoder_state->timer_handle) != UINT16_MAX ||
+            HAL_TIM_Encoder_Start(encoder_state->timer_handle, TIM_CHANNEL_ALL) != HAL_OK) {
+            return false;
+        }
+        encoder_state->previous_count =
+            (uint16_t)__HAL_TIM_GET_COUNTER(encoder_state->timer_handle);//记录当前计数器值，作为下次采样的基准
+    }
+    return true;
 }
-
-int32_t encoder_get_delta(uint8_t id)
-{
-    encoder_t *e = &enc[id];
-
-    uint16_t now = (uint16_t)__HAL_TIM_GET_COUNTER(e->htim);
-    int32_t  d   = (int16_t)(now - e->last_cnt);
-
-    e->last_cnt = now;
-    e->delta    = d * e->sign;
-    e->total   += e->delta;
-    return e->delta;
+/**读取指定轮子的本次计数增量。 */
+int32_t bsp_encoder_read_delta(motor_id_t motor_id) {
+    if ((unsigned int)motor_id >= MOTOR_COUNT) {
+        return 0;
+    }
+    encoder_state_t *encoder_state = &encoder_states[motor_id];
+    uint16_t current_count = (uint16_t)__HAL_TIM_GET_COUNTER(encoder_state->timer_handle);//读取当前计数器值
+    uint16_t wrapped_delta = (uint16_t)(current_count - encoder_state->previous_count);
+    /* 处理反绕问题 */
+    int32_t delta_counts =
+        wrapped_delta < 32768U ? (int32_t)wrapped_delta : (int32_t)wrapped_delta - 65536;
+    encoder_state->previous_count = current_count;//更新上次采样值
+    return delta_counts * encoder_state->direction_sign;//修正方向后返回增量
 }
-
-int32_t encoder_get_total(uint8_t id) { return enc[id].total; }
-void    encoder_reset_total(uint8_t id) { enc[id].total = 0; }
-void    encoder_set_sign(uint8_t id, int8_t sign) { enc[id].sign = (sign >= 0) ? +1 : -1; }
-/*以上所有的id都表示左右轮，id=0表示左轮，id=1表示右轮*/
