@@ -1,0 +1,17 @@
+# 仓库统一用 LF。代码最终在 Linux 上跑，Windows 编辑器也不许转 CRLF，
+# 否则每次提交都会出现"整个文件都改了"的假 diff。
+* text=auto eol=lf
+
+# 二进制：不做任何换行转换
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.zip   binary
+*.mp4   binary
+*.pdf   binary
+
+# STEP 模型是文本格式但体积巨大，按二进制处理，避免逐行比对卡死
+*.STEP  -text
+*.step  -text
+*.stl   -text

@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import select
 import sys
 import time
@@ -32,10 +33,12 @@ except ImportError:  # pragma: no cover
     tty = None  # type: ignore[assignment]
 
 import link as link_mod
+import params
 import protocol as p
 from fsm import S, Mission
 from line_follow import LineConfig, LineFollower
 from logger import RunLogger
+from odometry import Odometry
 
 LOOP_DT = 0.020  # 50 Hz
 
@@ -61,6 +64,8 @@ def main() -> int:
     ap.add_argument("--logdir", default="logs")
     args = ap.parse_args()
 
+    params.load_override()
+
     port = "sim" if args.sim else args.port
     link = link_mod.open_link(port, args.baud)
     cam = None
@@ -80,7 +85,8 @@ def main() -> int:
             print(f"[warn] 视觉不可用，退回纯红外：{exc}", file=sys.stderr)
             cam, detector, qr = None, None, None
 
-    follower = LineFollower(LineConfig())
+    follower = LineFollower(LineConfig(v_cruise=params.V_CRUISE))
+    odo = Odometry(params.WHEEL_BASE, params.TICKS_PER_METER)
     log = RunLogger(args.logdir, name="run", video=args.video)
     mission = Mission(follower, log)
     mission.goto(S.WAIT_QR if not args.no_qr else S.SEG_A)
@@ -111,6 +117,7 @@ def main() -> int:
             if states:
                 last_state = states[-1]
             ir = last_state.ir if last_state else 0
+            pose = odo.update(last_state.enc_l, last_state.enc_r) if last_state else odo.pose
             if last_state and last_state.watchdog_tripped:
                 log.event("LINK", "下位机看门狗超时，说明指令没发出去")
 
@@ -170,6 +177,9 @@ def main() -> int:
                 conf=round(conf, 3),
                 enc_l=last_state.enc_l if last_state else 0,
                 enc_r=last_state.enc_r if last_state else 0,
+                x_mm=round(pose.x * 1000, 1),
+                y_mm=round(pose.y * 1000, 1),
+                th_deg=round(math.degrees(pose.theta), 2),
             )
             if args.video and frame is not None:
                 log.frame(frame)

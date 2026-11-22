@@ -76,15 +76,17 @@ class SimLink:
     红外位根据横向偏移生成。目的是验证状态机/日志/视觉接口，不是验证控制效果。
     """
 
-    def __init__(self, seed_ir: str = "00100") -> None:
+    def __init__(self, seed_ir: str = "00100", ticks_per_meter: float = 5253.0) -> None:
         self.t = 0.0
         self.v = 0.0
         self.w = 0.0
         self.mode = p.MODE_IDLE
         self.x = 0.0  # 横向偏移（m），相对赛道中心线
         self.y = 0.0  # 沿赛道里程（m）
+        self.heading = 0.0  # 航向（rad），用于仿真里的赛道推进
         self.enc_l = 0
         self.enc_r = 0
+        self.tpm = ticks_per_meter
         self._last = time.monotonic()
         self._status = p.ST_ENCODER
 
@@ -115,19 +117,24 @@ class SimLink:
         if self.mode != p.MODE_RUN:
             self.v = self.w = 0.0
 
-        # 位移更新
-        self.y += self.v * dt
-        self.x += math.sin(self.w) * self.v * dt * 0.5
+        # 差速运动学
+        b = 0.252
+        v_l = self.v - self.w * b * 0.5
+        v_r = self.v + self.w * b * 0.5
 
-        self.enc_l += int(self.v * 1000 * dt)
-        self.enc_r += int(self.v * 1000 * dt)
+        self.heading += self.w * dt
+        self.x += math.sin(self.heading) * self.v * dt
+        self.y += math.cos(self.heading) * self.v * dt
+
+        self.enc_l += int(v_l * self.tpm * dt)
+        self.enc_r += int(v_r * self.tpm * dt)
         self.t += dt
 
         return [
             p.State(
                 tick_ms=int(self.t * 1000),
-                v_l=self.v,
-                v_r=self.v,
+                v_l=v_l,
+                v_r=v_r,
                 enc_l=self.enc_l,
                 enc_r=self.enc_r,
                 ir=self._ir_word(),

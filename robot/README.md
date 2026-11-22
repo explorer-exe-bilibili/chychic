@@ -35,8 +35,10 @@ python3 main.py --port /dev/ttyUSB0 --no-vision   # 只跑红外，排查相机
 docs/protocol.md          通信协议（帧格式、消息、安全规则）
 host/
   main.py                 主循环 50Hz
+  params.py               **全车硬件参数，实测后只改这里**
   protocol.py             编解码 + CRC16（与固件逐位一致）
   link.py                 串口链路 / 仿真链路
+  odometry.py             编码器 -> 位姿（差速航迹推算）
   line_follow.py          红外 + 视觉融合的循迹控制器
   pid.py                  PID + 限速器
   fsm.py                  任务状态机（A→B→C→D）
@@ -44,7 +46,8 @@ host/
   vision/line.py          赛道黑线检测
   vision/qr.py            启动二维码解析
   vision/camera.py        独立线程抓帧（防卡死）
-  tools/test_protocol.py  协议自测
+  tools/test_protocol.py  协议自测（不用硬件）
+  tools/bringup.py        上车标定：方向 / ticks_per_meter / 轮距
 firmware/
   App/…                   STM32 应用层（协议 / 电机 / 看门狗）
   README.md               接入 CubeMX 的三处改动 + 标定步骤
@@ -77,10 +80,19 @@ firmware/
 
 ## 立刻要做的三件事
 
-1. **标定 `ticks_per_meter`**（见 `firmware/README.md` 第三节）。
-   不标定，速度闭环就是错的，后面所有调参都建立在错误基础上。
+1. **上车标定**（一条命令走完，输出直接抄进 `params.py`）：
+
+   ```bash
+   cd host
+   python3 tools/bringup.py --port /dev/ttyUSB0
+   ```
+
+   依次验：能不能收到状态 → 编码器方向对不对 → 推车一米算 `TICKS_PER_METER`
+   → 原地转一圈算 `WHEEL_BASE`。**第一次跑把车架起来**，3、4 步再落地。
+
 2. **对拍协议**：`tools/test_protocol.py` 打的金帧，让下位机逐字节核对。
    两端 CRC 对不上时不要往下做，浪费时间。
+
 3. **实测调 `LineConfig`**（`host/line_follow.py` 顶部）：
    `v_cruise` 从 0.25 开始，`kp` 从 1.0 往上加，直到直道能压住线又不抖。
 

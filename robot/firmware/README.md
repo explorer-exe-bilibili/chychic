@@ -63,12 +63,26 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 ## 三、`ticks_per_meter` 标定（**必做，不标定速度环就是错的**）
 
-1. 上位机发 `MODE_CALIB`（电机不转，只累计编码器）
-2. 手推车沿直线走**正好 1 米**（地上贴胶带做记号）
-3. 读上位机日志里的 `enc_l`（或 `enc_r`）末值
-4. `ticks_per_meter = 那个数 / 1.0`
+别再手算了，上位机有一条命令走完：
 
-两次取平均，再除以实测轮径修正一次。这个值差 20%，速度环就会震荡。
+```bash
+cd ../host && python3 tools/bringup.py --port /dev/ttyUSB0
+```
+
+它会依次验连通性、编码器方向，然后用"推车一米"算 `TICKS_PER_METER`、
+用"原地转一圈"算 `WHEEL_BASE`，最后直接打印出该抄进 `app.c` 的两行：
+
+```c
+#define APP_WHEEL_BASE      0.252f
+#define APP_TICKS_PER_METER 5253.0f
+```
+
+固件里这两个值必须和 `host/params.py` 完全一致，各写各的必然对不上。
+
+> 手算参考：`TICKS_PER_METER = PPR × 4 × 减速比 ÷ (π × 轮径)`
+> 例：霍尔 11 线、4 倍频、减速比 30、轮径 0.080 m → `1320 / 0.2513 ≈ 5253`
+> 这个值只能当起点，轮径和减速比的实际误差常有 5%，必须实测覆盖。
+
 
 ## 四、上电与安全
 
