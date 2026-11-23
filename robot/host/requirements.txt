@@ -1,0 +1,7 @@
+pyserial>=3.5
+numpy>=1.24
+
+# ARM64 上强烈建议用系统包，别 pip 装：
+#   sudo apt install python3-opencv python3-numpy
+# 如果一定要 pip：
+# opencv-python-headless>=4.8
