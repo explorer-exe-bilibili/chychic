@@ -43,6 +43,12 @@ from odometry import Odometry
 LOOP_DT = 0.020  # 50 Hz
 
 
+def _parse_source(text: str) -> int | str:
+    """'0' -> 0（USB 相机）；'http://...' 或 '/dev/video0' 原样传下去。"""
+    text = str(text).strip()
+    return int(text) if text.isdigit() else text
+
+
 def _check_key() -> str | None:
     """非阻塞读一个键，没有就返回 None。"""
     dr, _, _ = select.select([sys.stdin], [], [], 0)
@@ -55,7 +61,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", default="sim", help="串口，如 /dev/ttyUSB0；sim 表示仿真")
     ap.add_argument("--baud", type=int, default=115200)
-    ap.add_argument("--camera", type=int, default=0)
+    ap.add_argument(
+        "--camera",
+        default="0",
+        help="相机源：0 为 USB 相机；也可给 URL，如 http://127.0.0.1:8080/video（手机 MJPEG）",
+    )
     ap.add_argument("--sim", action="store_true", help="强制仿真链路")
     ap.add_argument("--no-vision", action="store_true")
     ap.add_argument("--no-qr", action="store_true", help="跳过二维码，直接开跑")
@@ -77,7 +87,7 @@ def main() -> int:
             from vision import Camera, LineDetector, QRReader, parse_task as _parse_task
 
             parse_task = _parse_task
-            cam = Camera(args.camera)
+            cam = Camera(_parse_source(args.camera))
             detector = LineDetector()
             if not args.no_qr:
                 qr = QRReader()

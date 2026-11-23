@@ -12,9 +12,22 @@ import numpy as np
 
 
 class Camera:
+    """摄像头源。
+
+    source 支持三种写法：
+
+        Camera(0)                                    # 本机 USB 相机 / 树莓派 CSI
+        Camera("http://127.0.0.1:8080/video")        # MJPEG 流（手机当主控时用这个）
+        Camera("/dev/video0")                        # Linux V4L2 设备节点
+
+    手机方案下，内置摄像头由 App 在本地开 MJPEG 服务，OpenCV 直接读 HTTP，
+    不经过 USB，绕开 Android 内核没有 UVC 驱动的问题。
+    代价是延迟（典型 60-120ms），所以循迹 PID 应该放在下位机跑。
+    """
+
     def __init__(
         self,
-        index: int = 0,
+        source: int | str = 0,
         width: int = 640,
         height: int = 480,
         fps: int = 30,
@@ -23,15 +36,22 @@ class Camera:
         import cv2  # 延迟导入
 
         self._cv2 = cv2
-        self.cap = cv2.VideoCapture(index)
+        self.source = source
+        self.cap = cv2.VideoCapture(source)
         if not self.cap.isOpened():
-            raise RuntimeError(f"打不开摄像头 index={index}")
-        if fourcc:
-            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        self.cap.set(cv2.CAP_PROP_FPS, fps)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # 关键：别让缓冲区堆积
+            raise RuntimeError(f"打不开摄像头 source={source!r}")
+
+        # 网络流不支持这些属性，设了也无害（返回 False）
+        if not isinstance(source, str) or source.startswith("/dev/"):
+            if fourcc:
+                self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            self.cap.set(cv2.CAP_PROP_FPS, fps)
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # 关键：别让缓冲区堆积
+        else:
+            # MJPEG 流：让 OpenCV 用 FFMPEG 后端并尽量少缓冲
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         self._frame: np.ndarray | None = None
         self._seq = 0
