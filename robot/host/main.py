@@ -59,7 +59,11 @@ def _check_key() -> str | None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", default="sim", help="串口，如 /dev/ttyUSB0；sim 表示仿真")
+    ap.add_argument(
+        "--port",
+        default="sim",
+        help="串口设备，如 /dev/ttyUSB0；android 表示手机用户态 CH340；sim 表示仿真",
+    )
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument(
         "--camera",

@@ -26,10 +26,14 @@ class SerialLink:
     发送端要按固定频率调 send_vel，下位机有 200ms 看门狗。
     """
 
-    def __init__(self, port: str, baud: int = 115200) -> None:
-        import serial  # 延迟导入，--sim 模式下不需要 pyserial
+    def __init__(self, port, baud: int = 115200) -> None:
+        # port 可以是串口路径，也可以是已经打开的对象（例如 Android 的 Ch340）
+        if hasattr(port, "write") and hasattr(port, "read_any"):
+            self._ser = port
+        else:
+            import serial  # 延迟导入，--sim 模式下不需要 pyserial
 
-        self._ser = serial.Serial(port, baud, timeout=0)
+            self._ser = serial.Serial(port, baud, timeout=0)
         self._dec = p.Decoder()
         self._seq = 0
         self._sent = 0
@@ -49,10 +53,16 @@ class SerialLink:
         self._ser.write(p.encode_estop(self._next_seq()))
 
     def poll(self) -> list[p.State]:
-        waiting = self._ser.in_waiting
-        if not waiting:
+        # Android 的 Ch340 没有 in_waiting，用 read_any 直接取
+        if hasattr(self._ser, "read_any"):
+            data = self._ser.read_any(256)
+        else:
+            waiting = self._ser.in_waiting
+            if not waiting:
+                return []
+            data = self._ser.read(waiting)
+        if not data:
             return []
-        data = self._ser.read(waiting)
         states: list[p.State] = []
         for cmd, payload in self._dec.feed(data):
             if cmd == p.FB_STATE:
@@ -153,4 +163,9 @@ class SimLink:
 def open_link(port: str | None, baud: int = 115200) -> Link:
     if port in (None, "", "sim"):
         return SimLink()
+    if port in ("android", "ch340"):
+        # 手机当主控：内核没有 USB 串口驱动，走用户态 CH340
+        from android_ch340 import Ch340
+
+        return SerialLink(Ch340(baud), baud)
     return SerialLink(port, baud)

@@ -48,6 +48,7 @@ host/
   vision/camera.py        独立线程抓帧（防卡死）
   tools/test_protocol.py  协议自测（不用硬件）
   tools/bringup.py        上车标定：方向 / ticks_per_meter / 轮距
+  android_ch340.py        Android 用户态 CH340 驱动（手机当主控时用，见 docs/android-main.md）
 firmware/
   App/…                   STM32 应用层（协议 / 电机 / 看门狗）
   README.md               接入 CubeMX 的三处改动 + 标定步骤
