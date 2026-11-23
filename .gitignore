@@ -1,3 +1,11 @@
 # 编译生成目录
 /build/
 /cmake-build-*/
+
+# 机械模型与 STEP 解析产物：体积大（36MB+），用 Release 或网盘存档，
+# 不放进 git 历史。需要版本追溯时用 Git LFS。
+*.STEP
+*.step
+V*.zip
+final.json
+parts_table.txt

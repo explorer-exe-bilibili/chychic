@@ -51,7 +51,11 @@ add_executable(${CMAKE_PROJECT_NAME}
         bsp/Inc/bsp_line_sensor.h
         app/Src/app_line_follow.c
         app/Inc/app_line_follow.h
-        app/Inc/line_follow_config.h)
+        app/Inc/line_follow_config.h
+        app/Src/app_comm.c
+        app/Inc/app_comm.h
+        app/Src/protocol.c
+        app/Inc/protocol.h)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)

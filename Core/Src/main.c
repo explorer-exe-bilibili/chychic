@@ -18,13 +18,16 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "dma.h"
 #include "tim.h"
+#include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "chassis.h"
 #include "app_line_follow.h"
+#include "app_comm.h"
 #include "chassis_config.h"
 #include "gettick.h"
 #include "bsp_motor.h"
@@ -91,9 +94,11 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_TIM2_Init();
   MX_TIM3_Init();
   MX_TIM4_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   if (!chassis_init())
   {
@@ -101,6 +106,8 @@ int main(void)
   }
   app_line_follow_init();
   /* 默认上电不循迹；确认极性和顺序后，由主循环调用 app_line_follow_start() 启动。 */
+  /* 通信初始化：启动 USART1 循环 DMA 接收，上电默认 IDLE，等上位机下模式。 */
+  app_comm_init(&huart1);
   /* last_control_tick_ms：上次采样时刻，毫秒；启动后目标默认为零。 */
   uint32_t last_control_tick_ms = Get_tick();
   /* USER CODE END 2 */
@@ -112,12 +119,17 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    /* 通信收：每圈都跑，DMA 环形缓冲不会因为控制周期太长而覆盖 */
+    app_comm_poll();
+
     /* 无符号差值可跨 HAL tick 回绕；超期只更新一次，传入实际经过时间。 */
     uint32_t current_tick_ms = Get_tick();
     uint32_t elapsed_ms = current_tick_ms - last_control_tick_ms;
     if (elapsed_ms >= CHASSIS_CONTROL_PERIOD_MS)
     {
       last_control_tick_ms = current_tick_ms;
+      /* 先跑看门狗与遥测：上位机失联则此处已把模式切回 IDLE 并停车 */
+      app_comm_update(elapsed_ms);
       /* 先由循迹模块设置目标，再统一测速、推进斜坡并输出电机 PWM。 */
       app_line_follow_update(elapsed_ms);
       chassis_update(elapsed_ms);
