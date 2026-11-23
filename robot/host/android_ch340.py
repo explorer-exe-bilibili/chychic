@@ -76,6 +76,22 @@ MAX_BPS = 3_000_000   # 48e6 / (8 * 2)
 
 DEFAULT_TIMEOUT_MS = 1000
 
+# USB 端点传输类型（bmAttributes 低 2 位）
+_XFER_BULK = 0x02
+
+
+def _is_bulk(ep) -> bool:
+    """是否 bulk 端点。CH340 上还有一个 0x81 中断端点，绝不能拿它收发数据。"""
+    return (ep.bmAttributes & 0x03) == _XFER_BULK
+
+
+def _is_in(ep) -> bool:
+    return (ep.bEndpointAddress & 0x80) != 0
+
+
+def _is_out(ep) -> bool:
+    return (ep.bEndpointAddress & 0x80) == 0
+
 
 def _clk_div(ps: int, fact: int) -> int:
     """对应内核宏 CH341_CLK_DIV(ps, fact)。"""
@@ -157,16 +173,17 @@ class Ch340:
 
         self.ep_out = self._util.find_descriptor(
             self.intf,
-            custom_match=lambda e: self._util.endpoint_direction(e.bEndpointAddress)
-            == self._util.ENDPOINT_OUT,
+            custom_match=lambda e: _is_bulk(e) and _is_out(e),
         )
         self.ep_in = self._util.find_descriptor(
             self.intf,
-            custom_match=lambda e: self._util.endpoint_direction(e.bEndpointAddress)
-            == self._util.ENDPOINT_IN,
+            custom_match=lambda e: _is_bulk(e) and _is_in(e),
         )
         if self.ep_out is None or self.ep_in is None:
-            raise RuntimeError("找不到 bulk 端点，设备可能不是标准 CH340")
+            raise RuntimeError(
+                "找不到 bulk 端点。CH340 正常应是 OUT=0x02、IN=0x82；"
+                f"实际拿到 OUT={self.ep_out} IN={self.ep_in}"
+            )
 
         self._clear_halt()
         self.version = self._configure(baud)
@@ -236,6 +253,22 @@ class Ch340:
 # ==========================================================================
 
 
+def cmd_probe(baud: int) -> int:
+    """不需要回环：只验证能打开设备、能读到芯片版本、端点正确。"""
+    print("打开 CH340 …")
+    port = Ch340(baud)
+    print(f"  ✓ 打开成功")
+    print(f"  芯片版本 0x{port.version:02x}")
+    print(f"  分频值   0x{get_divisor(baud):04x} @ {baud} bps")
+    print(f"  端点     OUT=0x{port.ep_out.bEndpointAddress:02x} "
+          f"IN=0x{port.ep_in.bEndpointAddress:02x}")
+    if port.ep_in.bEndpointAddress != 0x82 or port.ep_out.bEndpointAddress != 0x02:
+        print("  ⚠ 端点和常见 CH340 不一致，但只要能收发就没问题")
+    port.close()
+    print("\n✓ 用户态驱动可用（要验数据通路，再跑 --selftest 并短接 TX-RX）")
+    return 0
+
+
 def cmd_selftest(baud: int) -> int:
     print("打开 CH340 …")
     port = Ch340(baud)
@@ -285,11 +318,14 @@ def cmd_monitor(baud: int) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--probe", action="store_true", help="只验证打开与配置，不需要回环")
     ap.add_argument("--selftest", action="store_true", help="TX-RX 短接做回环")
     ap.add_argument("--monitor", action="store_true", help="十六进制打印串口输入")
     ap.add_argument("--baud", type=int, default=115200)
     args = ap.parse_args()
 
+    if args.probe:
+        return cmd_probe(args.baud)
     if args.selftest:
         return cmd_selftest(args.baud)
     if args.monitor:

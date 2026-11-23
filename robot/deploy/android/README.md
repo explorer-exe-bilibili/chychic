@@ -135,9 +135,34 @@ chroot 和 Android 共享网络命名空间，`127.0.0.1` 是通的，不用担�
 ## 已知坑
 
 1. **不要在 `/data/local/tmp` 里解压 rootfs**：那是 `shell_data_file` 标签，
-   挂载和权限都可能出问题，用 `/data/local/linux`。
-2. **mount --bind 会叠加**：重复执行会把 `/dev` 挂很多层，脚本里有 `mountpoint -q`
+   挂载和权限都可能出问题，用 `/data/local/linux` 或 `/data/linux/ubuntu`。
+2. **`/dev` `/proc` `/sys` 三个都要 bind**。
+   只绑 `/dev` 时 `pyusb` 会返回 `设备数: 0` 且**不报错**——因为 libusb 是靠扫
+   `/sys/bus/usb/devices` 枚举设备的，`/dev/bus/usb` 只是打开节点用。
+   这个坑极容易误判成 SELinux 权限问题。
+3. **`mount --bind` 会叠加**：重复执行会把 `/dev` 挂很多层，脚本里有 `mountpoint -q`
    守卫，别自己手敲。
-3. **apt 会装 systemd 服务**，chroot 里没有 init，装完忽略那些报错即可。
-4. **手机重启后 chroot 里的 mount 全没了**，必须靠 `run.sh` 重新挂，
+4. **apt 用 http 源，别用 https**。Ubuntu Base 精简镜像没有 `ca-certificates`，
+   https 握手必然失败，报 `Certificate verification failed`。
+5. **`apt-get update` 会报 GPG 错误**：base 镜像没有 `gpgv`。先：
+   ```bash
+   apt-get -o Acquire::AllowInsecureRepositories=true update
+   apt-get install -y --allow-unauthenticated gpgv ubuntu-keyring
+   ```
+   装完再正常 update。
+6. **手机重启后 chroot 里的 mount 全没了**，必须靠 `run.sh` / `enter.sh` 重新挂，
    所以别指望手动 mount 一次就完事。
+
+## 实测记录（vivo V2072A / Android 13 / MTK 4.19.191）
+
+| 步骤 | 结果 |
+|---|---|
+| Ubuntu 22.04 arm64 chroot | ✅ bash / apt 正常 |
+| 清华 http 源 | ✅ 50.9 MB / 22 s（2.2 MB/s） |
+| `apt install python3 python3-usb usbutils` | ✅ Python 3.10.12 + pyusb 1.2.1 |
+| `lsusb`（bind 三个目录后） | ✅ 枚举到 5 个设备 |
+| 用户态 CH340 打开 | ✅ 芯片版本 `0x31`，分频 `0xCC03` |
+| `0x02`/`0x82` bulk 端点 | ✅ 选对（早期版本误选 `0x81` 中断端点，已修） |
+
+**结论：手机当主控这条路成立。** 剩下只需短接 TX-RX 验一次数据通路，
+或直接接 STM32 跑真实协议。
