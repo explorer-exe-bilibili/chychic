@@ -167,16 +167,29 @@ def main() -> int:
             out = mission.step(ir, offset, conf, dt)
 
             # --- 下发 -----------------------------------------------------
-            # 只有真正上赛道的状态才让 MCU 自主循迹；
-            # WAIT_QR 必须待机，否则扫到二维码之前车就跑了。
+            # 只有真正上赛道的状态才动；WAIT_QR 必须待机，
+            # 否则扫到二维码之前车就跑了。
             active = (S.SEG_A, S.SEG_B, S.SEG_C, S.SEG_D, S.RETURN)
-            want_mode = p.MODE_LINE_FOLLOW if mission.state in active else p.MODE_IDLE
+            if mission.state in active:
+                want_mode = (
+                    p.MODE_LINE_FOLLOW
+                    if params.LINE_FOLLOW_ON_MCU
+                    else p.MODE_MANUAL
+                )
+            else:
+                want_mode = p.MODE_IDLE
             if want_mode != mode_sent:
                 link.send_mode(want_mode)
                 mode_sent = want_mode
-                log.event("LINK", f"MODE -> {want_mode}")
-            if want_mode == p.MODE_RUN:
+                log.event(
+                    "LINK",
+                    f"MODE -> {want_mode} ({'MCU 循迹' if want_mode == p.MODE_LINE_FOLLOW else '上位机接管' if want_mode == p.MODE_MANUAL else '待机'})",
+                )
+            if want_mode == p.MODE_MANUAL:
+                # 上位机负责循迹：每帧都要下发，MCU 不自己产生速度
                 link.send_vel(out.v, out.w)
+            elif want_mode == p.MODE_LINE_FOLLOW:
+                pass  # MCU 自主循迹，别插手
             else:
                 link.send_vel(0.0, 0.0)
 
