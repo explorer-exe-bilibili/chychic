@@ -42,6 +42,7 @@ static uint32_t s_last_tx_ms;                    /* 最近一次发送遥测的�
 static uint32_t s_tx_frames;                     /* 已发送帧数 */
 static uint32_t s_tx_dropped;                    /* 因串口忙而丢弃的帧数 */
 static uint32_t s_rx_overrun;                    /* 接收溢出次数，正常应为 0 */
+static uint32_t s_rx_errors;                     /* 串口错误回调触发次数 */
 
 /* ---- 内部：模式切换 ---------------------------------------------------- */
 
@@ -295,4 +296,33 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     s_last_rx_ms = Get_tick();
     s_status &= (uint8_t)~ST_WATCHDOG;
     (void)HAL_UART_Receive_IT(huart, &s_it_byte, 1);
+}
+
+/**
+ * HAL_UART_ErrorCallback：串口错误处理。
+ * huart：触发回调的串口句柄。返回：无。
+ *
+ * 这是开启 USART1 全局中断后必须实现的部分。HAL 的 UART_IRQHandler 在检测到
+ * 溢出（ORE）/ 帧错 / 噪声时会先调用 UART_EndRxTransfer() 把接收停掉，再回调本函数。
+ * 如果这里不重新武装，一次总线毛刺就会让接收永久失效——现象是"跑一阵突然
+ * 再也收不到上位机指令"，而且不报任何错。
+ */
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    if (huart != s_huart) {
+        return;
+    }
+
+    s_rx_errors++;
+    huart->ErrorCode = HAL_UART_ERROR_NONE;
+
+    /* DMA 环形缓冲已经停了，从头重启；已解析位置一并归零 */
+    s_rx_tail = 0;
+
+    if (s_dma_rx_ok) {
+        __HAL_UART_CLEAR_OREFLAG(huart);
+        (void)HAL_UART_Receive_DMA(huart, s_rx_buf, APP_COMM_RX_BUF);
+    } else {
+        (void)HAL_UART_Receive_IT(huart, &s_it_byte, 1);
+    }
 }

@@ -118,8 +118,13 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
 
     __HAL_LINKDMA(uartHandle,hdmatx,hdma_usart1_tx);
 
+    /* USART1 interrupt Init */
+    HAL_NVIC_SetPriority(USART1_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(USART1_IRQn);
   /* USER CODE BEGIN USART1_MspInit 1 */
-
+  /* CubeMX 默认给的是优先级 0（最高），会抢占 SysTick，导致 HAL_GetTick 抖动。
+     串口只需要及时处理字节，压到 2 即可，给以后可能加入的控制定时器留出空间。 */
+  HAL_NVIC_SetPriority(USART1_IRQn, 2, 0);
   /* USER CODE END USART1_MspInit 1 */
   }
 }
@@ -144,6 +149,9 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
     /* USART1 DMA DeInit */
     HAL_DMA_DeInit(uartHandle->hdmarx);
     HAL_DMA_DeInit(uartHandle->hdmatx);
+
+    /* USART1 interrupt Deinit */
+    HAL_NVIC_DisableIRQ(USART1_IRQn);
   /* USER CODE BEGIN USART1_MspDeInit 1 */
 
   /* USER CODE END USART1_MspDeInit 1 */
