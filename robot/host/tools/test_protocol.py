@@ -61,11 +61,30 @@ def main() -> int:
     ok &= check("坏 CRC 被丢弃", len(got) == 0 and dec.crc_errors == 1)
 
     # 6. FB_STATE 解码
-    payload = struct.pack(">IffiiBB", 12345, 0.31, 0.29, -120, 88, 0b00100, p.ST_ENCODER)
+    payload = struct.pack(
+        ">IBBBfffffiiB",
+        12345,
+        p.MODE_LINE_FOLLOW,
+        p.LF_TRACKING,
+        0b00100,
+        0.35,
+        300.0,
+        0.0,
+        298.0,
+        302.0,
+        -120,
+        88,
+        p.ST_ENCODER,
+    )
     st = p.parse_state(payload)
-    ok &= check("FB_STATE 长度 22", len(payload) == 22)
-    ok &= check("FB_STATE 解码", st is not None and st.tick_ms == 12345 and st.enc_l == -120)
+    ok &= check("FB_STATE 长度 36", len(payload) == 36)
+    ok &= check(
+        "FB_STATE 解码",
+        st is not None and st.tick_ms == 12345 and st.enc_l == -120,
+    )
     ok &= check("红外位解析", st is not None and st.ir_bits == [False, False, True, False, False])
+    ok &= check("循迹状态文本", st is not None and st.lf_state_name == "循迹中")
+    ok &= check("轮速换算 m/s", st is not None and abs(st.v_m_s - 0.300) < 1e-6)
 
     # 7. 给 STM32 侧对拍用的金帧
     golden = p.encode_vel(0.5, 0.0, seq=1)

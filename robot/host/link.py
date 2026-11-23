@@ -12,6 +12,7 @@ import protocol as p
 class Link(Protocol):
     def send_vel(self, v: float, w: float) -> None: ...
     def send_mode(self, mode: int) -> None: ...
+    def send_ping(self) -> None: ...
     def estop(self) -> None: ...
     def poll(self) -> list[p.State]: ...
     def close(self) -> None: ...
@@ -43,11 +44,15 @@ class SerialLink:
         return self._seq
 
     def send_vel(self, v: float, w: float) -> None:
-        self._ser.write(p.encode_vel(v, w, self._next_seq()))
+        """上位机侧单位是 m/s、rad/s；线路上按 MCU 的 mm/s 发。"""
+        self._ser.write(p.encode_vel_mm(v * 1000.0, w, self._next_seq()))
         self._sent += 1
 
     def send_mode(self, mode: int) -> None:
         self._ser.write(p.encode_mode(mode, self._next_seq()))
+
+    def send_ping(self) -> None:
+        self._ser.write(p.encode_ping(self._next_seq()))
 
     def estop(self) -> None:
         self._ser.write(p.encode_estop(self._next_seq()))
@@ -106,6 +111,9 @@ class SimLink:
     def send_mode(self, mode: int) -> None:
         self.mode = mode
 
+    def send_ping(self) -> None:
+        pass
+
     def estop(self) -> None:
         self.mode = p.MODE_ESTOP
         self._status |= p.ST_ESTOP
@@ -140,14 +148,28 @@ class SimLink:
         self.enc_r += int(v_r * self.tpm * dt)
         self.t += dt
 
+        mask = self._ir_word()
+        # 仿真里也走一遍真实 MCU 的状态判定，方便上位机调试状态机
+        if self.mode != p.MODE_LINE_FOLLOW:
+            lf_state = p.LF_DISABLED
+        elif mask == 0:
+            lf_state = p.LF_LOST
+        else:
+            lf_state = p.LF_TRACKING
+
         return [
             p.State(
                 tick_ms=int(self.t * 1000),
-                v_l=v_l,
-                v_r=v_r,
+                mode=self.mode,
+                lf_state=lf_state,
+                line_mask=mask,
+                lf_error=self.x * 100.0,  # 仿真里直接把横向偏移当偏差
+                v_cmd=self.v * 1000.0,
+                w_cmd=self.w,
+                v_l=v_l * 1000.0,
+                v_r=v_r * 1000.0,
                 enc_l=self.enc_l,
                 enc_r=self.enc_r,
-                ir=self._ir_word(),
                 status=self._status,
             )
         ]

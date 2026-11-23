@@ -21,16 +21,26 @@ MAX_PAYLOAD = 64
 CMD_VEL = 0x10
 CMD_MODE = 0x11
 CMD_ESTOP = 0x12
+CMD_PING = 0x13
 
 # --- 下位机 -> 上位机 -------------------------------------------------------
 FB_STATE = 0x80
 FB_ACK = 0x81
 
 # --- mode ------------------------------------------------------------------
+# 语义对应 MCU 的 app_line_follow / chassis 接口：
+#   IDLE        电机断使能，可手推
+#   LINE_FOLLOW MCU 自主循迹（上位机不下发速度，只切模式）
+#   MANUAL      听 CMD_VEL，用于 A 区绕行、C 区对中这类"脱离黑线"的动作
+#   ESTOP       立即刹车并锁死，必须显式切回 IDLE 才解除
 MODE_IDLE = 0
-MODE_RUN = 1
-MODE_ESTOP = 2
-MODE_CALIB = 3
+MODE_LINE_FOLLOW = 1
+MODE_MANUAL = 2
+MODE_ESTOP = 3
+
+#: 兼容旧名
+MODE_RUN = MODE_LINE_FOLLOW
+MODE_CALIB = MODE_IDLE
 
 # status 位
 ST_ENCODER = 1 << 0
@@ -39,9 +49,30 @@ ST_WATCHDOG = 1 << 2
 ST_ESTOP = 1 << 3
 ST_STALL = 1 << 4
 
-_STATE_FMT = ">IffiiBB"
+#: FB_STATE 的 payload 布局，必须和 MCU 侧打包函数逐字节一致（大端）：
+#:   tick_ms(u32) mode(u8) lf_state(u8) line_mask(u8)
+#:   lf_error(f32) v_cmd(f32) w_cmd(f32) v_l(f32) v_r(f32)
+#:   enc_l(i32) enc_r(i32) status(u8)
+_STATE_FMT = ">IBBBfffffiiB"
 _STATE_SIZE = struct.calcsize(_STATE_FMT)
-assert _STATE_SIZE == 22, _STATE_SIZE
+assert _STATE_SIZE == 36, _STATE_SIZE
+
+#: 循迹状态，对应 MCU 的 line_follow_state_t
+LF_DISABLED = 0
+LF_ACQUIRING = 1
+LF_TRACKING = 2
+LF_LOST = 3
+LF_WIDE_LINE = 4
+LF_AMBIGUOUS = 5
+
+LF_STATE_CN = {
+    LF_DISABLED: "未启用",
+    LF_ACQUIRING: "找线中",
+    LF_TRACKING: "循迹中",
+    LF_LOST: "丢线",
+    LF_WIDE_LINE: "宽线",
+    LF_AMBIGUOUS: "多线段",
+}
 
 
 def crc16_ccitt(data: bytes, crc: int = 0xFFFF) -> int:
@@ -77,32 +108,66 @@ def encode_estop(seq: int = 0) -> bytes:
     return encode(CMD_ESTOP, b"", seq)
 
 
+def encode_ping(seq: int = 0) -> bytes:
+    return encode(CMD_PING, b"", seq)
+
+
+def encode_vel_mm(v_mm_s: float, w_rad_s: float, seq: int = 0) -> bytes:
+    """车速指令。单位 mm/s + rad/s，和 MCU 的 chassis_set_velocity 一致。"""
+    return encode(CMD_VEL, struct.pack(">ff", v_mm_s, w_rad_s), seq)
+
+
 @dataclass(frozen=True)
 class State:
-    """FB_STATE 解码结果。"""
+    """FB_STATE 解码结果。
+
+    速度单位是 **mm/s**（和 MCU 的 chassis 接口一致），不是上位机内部的 m/s。
+    跨层时用 ``v_m_s`` 换算，别把 ``v_l`` 直接塞进控制器。
+    """
 
     tick_ms: int
-    v_l: float
-    v_r: float
+    mode: int
+    lf_state: int
+    line_mask: int
+    lf_error: float
+    v_cmd: float  # 车体线速度目标 mm/s
+    w_cmd: float  # 车体角速度目标 rad/s
+    v_l: float  # 左轮实际 mm/s
+    v_r: float  # 右轮实际 mm/s
     enc_l: int
     enc_r: int
-    ir: int
     status: int
+
+    # -- 兼容旧调用 ---------------------------------------------------
+    @property
+    def ir(self) -> int:
+        """五路红外归一化位图（bit0 最左，1 = 黑线）。"""
+        return self.line_mask
+
+    @property
+    def v_m_s(self) -> float:
+        """车体线速度，m/s。"""
+        return (self.v_l + self.v_r) * 0.5 / 1000.0
 
     @property
     def v(self) -> float:
-        """车体线速度估计 m/s。"""
-        return (self.v_l + self.v_r) * 0.5
+        """``v_m_s`` 的别名，给旧日志代码用。"""
+        return self.v_m_s
 
-    @property
-    def w(self) -> float:
-        """车体角速度估计 rad/s（左正右负的叉乘约定见 kinematics）。"""
-        return (self.v_r - self.v_l) * 0.5
+    def w_rad_s(self, wheel_base_m: float) -> float:
+        """由左右轮速反算角速度，rad/s。"""
+        if wheel_base_m <= 0:
+            return 0.0
+        return (self.v_r - self.v_l) / 1000.0 / wheel_base_m
 
     @property
     def ir_bits(self) -> list[bool]:
         """五路红外，从左到右。"""
-        return [bool(self.ir & (1 << i)) for i in range(5)]
+        return [bool(self.line_mask & (1 << i)) for i in range(5)]
+
+    @property
+    def lf_state_name(self) -> str:
+        return LF_STATE_CN.get(self.lf_state, f"未知({self.lf_state})")
 
     @property
     def watchdog_tripped(self) -> bool:
@@ -115,8 +180,9 @@ class State:
     def describe(self) -> str:
         bits = "".join("1" if b else "0" for b in self.ir_bits)
         return (
-            f"t={self.tick_ms:>7} v=({self.v_l:+.2f},{self.v_r:+.2f}) "
-            f"ir={bits} st=0x{self.status:02x}"
+            f"t={self.tick_ms:>7} mode={self.mode} {self.lf_state_name:<4} "
+            f"线={bits} err={self.lf_error:+.2f} "
+            f"轮=({self.v_l:+.0f},{self.v_r:+.0f})mm/s st=0x{self.status:02x}"
         )
 
 

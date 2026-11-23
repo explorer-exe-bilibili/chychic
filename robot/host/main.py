@@ -167,7 +167,10 @@ def main() -> int:
             out = mission.step(ir, offset, conf, dt)
 
             # --- 下发 -----------------------------------------------------
-            want_mode = p.MODE_RUN if mission.state not in (S.IDLE, S.DONE, S.FAILSAFE) else p.MODE_IDLE
+            # 只有真正上赛道的状态才让 MCU 自主循迹；
+            # WAIT_QR 必须待机，否则扫到二维码之前车就跑了。
+            active = (S.SEG_A, S.SEG_B, S.SEG_C, S.SEG_D, S.RETURN)
+            want_mode = p.MODE_LINE_FOLLOW if mission.state in active else p.MODE_IDLE
             if want_mode != mode_sent:
                 link.send_mode(want_mode)
                 mode_sent = want_mode
