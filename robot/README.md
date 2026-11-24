@@ -29,6 +29,23 @@ python3 main.py --port /dev/ttyUSB0 --no-vision   # 只跑红外，排查相机
 
 键盘：`空格` 急停，`q` 退出。
 
+## 手动遥控（建议先跑这个）
+
+在车上跑起来，笔记本浏览器打开就能开：
+
+```bash
+python3 teleop.py --port /dev/ttyUSB0     # 手机用 --port android
+# 浏览器打开 http://<车上设备IP>:8000
+```
+
+拖摇杆或按 WASD。好处是**不依赖任何第三方库**，而且能同时验证三件事：
+串口链路、电机转向、速度环。转向反了就在 `chassis_config.h` 里改极性，
+不用等算法。
+
+安全设计：浏览器 20Hz 上报，**超过 400ms 没有指令自动停车**——拔网线、
+关笔记本、切 Wi-Fi 都不会失控。服务端还有一层限幅，前端改参数也超不过
+`--v-max / --w-max`。
+
 ## 目录
 
 ```
@@ -46,6 +63,7 @@ host/
   vision/line.py          赛道黑线检测
   vision/qr.py            启动二维码解析
   vision/camera.py        独立线程抓帧（防卡死）
+  teleop.py               网页遥控：浏览器当手柄，先验底盘
   tools/test_protocol.py  协议自测（不用硬件）
   tools/bringup.py        上车标定：方向 / ticks_per_meter / 轮距
   android_ch340.py        Android 用户态 CH340 驱动（手机当主控时用，见 docs/android-main.md）

@@ -40,13 +40,19 @@ class MCU:
         self.state: p.State | None = None
         self.mode = p.MODE_IDLE
         self._last_ping = 0.0
+        self._last_rx = 0.0
 
     # -- 收发 ---------------------------------------------------------
     def poll(self) -> list[p.State]:
         states = self.link.poll()
         if states:
             self.state = states[-1]
+            self._last_rx = time.monotonic()
         return states
+
+    def is_online(self, timeout: float = 0.5) -> bool:
+        """最近 timeout 秒内是否收到过遥测。没收到说明链路或下位机有问题。"""
+        return self.state is not None and (time.monotonic() - self._last_rx) <= timeout
 
     def keepalive(self, now: float | None = None) -> None:
         """每个主循环都要调。MCU 靠它在主机挂掉时判断失联。"""

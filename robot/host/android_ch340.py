@@ -74,7 +74,7 @@ CLKRATE = 48_000_000
 MIN_BPS = 46          # ceil(48e6 / (4096 * 256))
 MAX_BPS = 3_000_000   # 48e6 / (8 * 2)
 
-DEFAULT_TIMEOUT_MS = 1000
+DEFAULT_TIMEOUT_MS = 150
 
 # USB 端点传输类型（bmAttributes 低 2 位）
 _XFER_BULK = 0x02
@@ -235,7 +235,7 @@ class Ch340:
     def read_any(self, max_len: int = 256) -> bytes:
         """读当前能读到的字节；没有就返回空（不阻塞主循环）。"""
         try:
-            return bytes(self.ep_in.read(max_len, timeout=20))
+            return bytes(self.ep_in.read(max_len, timeout=8))
         except self._usb.core.USBTimeoutError:
             return b""
         except Exception:  # noqa: BLE001
