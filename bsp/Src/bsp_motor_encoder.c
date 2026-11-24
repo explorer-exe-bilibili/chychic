@@ -9,7 +9,7 @@ typedef struct {
 } encoder_state_t;
 
 static encoder_state_t encoder_states[MOTOR_COUNT] = {
-    {&htim3, 0, +1}, /* 左轮：TIM3 CH1/CH2，PB4/PB5，部分重映射。 */
+    {&htim3, 0, -1}, /* 左轮：TIM3 CH1/CH2，PB4/PB5，部分重映射。 */
     {&htim2, 0, +1}, /* 右轮：TIM2 CH1/CH2，PA0/PA1。 */
 };
 

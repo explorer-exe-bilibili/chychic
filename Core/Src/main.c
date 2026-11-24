@@ -105,6 +105,7 @@ int main(void)
     Error_Handler();
   }
   app_line_follow_init();
+chassis_set_velocity(0.0f, 0.0f);
   /* 默认上电不循迹；确认极性和顺序后，由主循环调用 app_line_follow_start() 启动。 */
   /* 通信初始化：启动 USART1 循环 DMA 接收，上电默认 IDLE，等上位机下模式。 */
   app_comm_init(&huart1);

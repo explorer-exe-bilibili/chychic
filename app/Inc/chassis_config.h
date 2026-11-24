@@ -6,8 +6,8 @@
 #define CHASSIS_MAX_WHEEL_SPEED_MM_S 600.0f    /* 单轮目标速度上限，毫米/秒。 */
 #define CHASSIS_MAX_ACCELERATION_MM_S2 6000.0f /* 单轮指令加速度上限，毫米/秒²。 */
 #define CHASSIS_CONTROL_PERIOD_MS 10U          /* 主循环目标更新间隔，毫秒。 */
-#define MOTOR_LEFT_DEADZONE_PERMILLE 180       /* 左轮开环启动补偿，千分比。 */
-#define MOTOR_RIGHT_DEADZONE_PERMILLE 180      /* 右轮开环启动补偿，千分比。 */
+#define MOTOR_LEFT_DEADZONE_PERMILLE 260       /* 左轮开环启动补偿，千分比。 */
+#define MOTOR_RIGHT_DEADZONE_PERMILLE 270      /* 右轮开环启动补偿，千分比。 */
 #define MOTOR_ZERO_SPEED_THRESHOLD_MM_S 1.0f   /* 低于此目标速度时输出零。 */
 
 #define MOTOR_ENCODER_PULSES_PER_REV 11U   /* 电机轴单通道每转脉冲数，待核验。 */

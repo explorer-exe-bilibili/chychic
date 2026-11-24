@@ -5,11 +5,14 @@
 #     su
 #     sh /data/local/tmp/enter.sh
 #
-# 注意三点：
+# 注意四点：
 #   1. 必须先 su —— chroot() 需要 CAP_SYS_CHROOT，
 #      而且只有 magisk 域能读 /dev/bus/usb（SELinux 是 Enforcing）
 #   2. /dev /proc /sys 要 bind 进去，否则里面看不到 USB、也没有 /proc
-#   3. 退出时自动 umount，避免下次重复挂载叠加
+#   3. **退出时故意不 umount**：挂载是全局的，不归属于某个进程。
+#      如果这里卸载，会把同时在用的另一个会话（比如 adb）的挂载一起拆掉，
+#      对方会突然"设备消失"且不报错。挂载是幂等的，留着无害。
+#   4. 真要清理，用 cleanup.sh，并确认没人在用 chroot
 
 ROOT="${ROOT:-/data/linux/ubuntu}"
 
@@ -41,7 +44,8 @@ chroot "$ROOT" /usr/bin/env -i \
     LANG=C.UTF-8 \
     /bin/bash -l
 
-# 退出后收拾干净，否则下次 mount --bind 会叠一层
-umount "$ROOT/sys"  2>/dev/null
-umount "$ROOT/proc" 2>/dev/null
-umount "$ROOT/dev"  2>/dev/null
+# 这里**故意不 umount**。
+# 挂载是全局状态，谁挂的无法追踪；在这里卸载会波及同时在用的其它会话。
+# 下次进入时 mountpoint -q 会跳过已挂载的，不会叠加。
+echo "已退出 chroot。挂载保留（下次进入不会重复叠加）。"
+echo "要彻底清理请运行 cleanup.sh，并确保没有其它会话还在 chroot 里。"
