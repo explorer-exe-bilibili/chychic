@@ -9,3 +9,8 @@
 V*.zip
 final.json
 parts_table.txt
+
+# 编辑器/IDE 配置（CLion、VSCode、CubeIDE），不随仓库走
+.clangd
+.vscode/
+.settings/

@@ -132,7 +132,8 @@ class SimLink:
         now = time.monotonic()
         dt = now - self._last
         self._last = now
-        if self.mode != p.MODE_RUN:
+        # 循迹和手动都算"在跑"；只有 IDLE / ESTOP 才强制零速
+        if self.mode not in (p.MODE_LINE_FOLLOW, p.MODE_MANUAL):
             self.v = self.w = 0.0
 
         # 差速运动学
