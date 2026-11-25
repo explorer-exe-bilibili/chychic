@@ -35,6 +35,8 @@ enable_language(C ASM)
 add_executable(${CMAKE_PROJECT_NAME}
         app/Src/app_motor.c
         app/Inc/app_motor.h
+        app/Src/pid.c
+        app/Inc/pid.h
         bsp/Src/bsp_motor.c
         bsp/Inc/bsp_motor.h
         app/Src/motor_speed.c

@@ -2,6 +2,7 @@
 #include "bsp_line_sensor.h"
 #include "chassis.h"
 #include "line_follow_config.h"
+#include "pid.h"
 #include <stddef.h>
 
 _Static_assert(LINE_FOLLOW_ACTIVE_LOW == 0 || LINE_FOLLOW_ACTIVE_LOW == 1,
@@ -21,6 +22,14 @@ static uint8_t candidate_line_mask;
 static uint8_t stable_samples;
 /* sensor_weights：左正右负，与 chassis 的逆时针正角速度约定一致。 */
 static const float sensor_weights[LINE_SENSOR_COUNT] = {2.0f, 1.0f, 0.0f, -1.0f, -2.0f};
+
+#ifdef LINE_FOLLOW_STEERING_PID_GAINS
+/* steering_pid_gains / steering_pid_state：循迹转向增益和计算历史。 */
+static const pid_gains_t steering_pid_gains = LINE_FOLLOW_STEERING_PID_GAINS;
+static pid_state_t steering_pid_state;
+/* steering_elapsed_s：距上一次 PID 更新的有效采样时间，包含等待线型确认的时间。 */
+static float steering_elapsed_s;
+#endif
 
 /**
  * line_follow_normalize：将 OUT 原始电平转换为从左到右的黑线位图。
@@ -54,6 +63,10 @@ static void line_follow_clear_command(line_follow_state_t state) {
     follow_status.position_error = 0.0f;
     follow_status.linear_speed_mm_s = 0.0f;
     follow_status.angular_speed_rad_s = 0.0f;
+#ifdef LINE_FOLLOW_STEERING_PID_GAINS
+    pid_reset(&steering_pid_state);
+    steering_elapsed_s = 0.0f;
+#endif
     chassis_stop();
 }
 
@@ -115,6 +128,11 @@ void app_line_follow_update(uint32_t dt_ms)
     }
     follow_status.position_error = weighted_position_sum / (float)follow_status.active_sensor_count;
 
+#ifdef LINE_FOLLOW_STEERING_PID_GAINS
+    float dt_s = (float)dt_ms / 1000.0f;
+    steering_elapsed_s += dt_s;
+#endif
+
     if (follow_status.line_mask != candidate_line_mask) {
         candidate_line_mask = follow_status.line_mask;
         stable_samples = 1U;
@@ -129,12 +147,25 @@ void app_line_follow_update(uint32_t dt_ms)
         return;
     }
 
-    float angular_speed_rad_s = follow_status.position_error * LINE_FOLLOW_STEERING_KP_RAD_S;
+    float angular_speed_rad_s;
+#ifdef LINE_FOLLOW_STEERING_PID_GAINS
+    /* 首次捕获从当前采样周期起积分；循迹中计入等待线型确认的周期。 */
+    float control_dt_s = follow_status.state == LINE_FOLLOW_TRACKING ? steering_elapsed_s : dt_s;
+    steering_elapsed_s = 0.0f;
+    if (!pid_step(&steering_pid_state, &steering_pid_gains, follow_status.position_error,
+                  control_dt_s, 0.0f, -LINE_FOLLOW_MAX_ANGULAR_SPEED_RAD_S,
+                  LINE_FOLLOW_MAX_ANGULAR_SPEED_RAD_S, &angular_speed_rad_s)) {
+        line_follow_clear_command(LINE_FOLLOW_ACQUIRING);
+        return;
+    }
+#else
+    angular_speed_rad_s = follow_status.position_error * LINE_FOLLOW_STEERING_KP_RAD_S;
     if (angular_speed_rad_s > LINE_FOLLOW_MAX_ANGULAR_SPEED_RAD_S) {
         angular_speed_rad_s = LINE_FOLLOW_MAX_ANGULAR_SPEED_RAD_S;
     } else if (angular_speed_rad_s < -LINE_FOLLOW_MAX_ANGULAR_SPEED_RAD_S) {
         angular_speed_rad_s = -LINE_FOLLOW_MAX_ANGULAR_SPEED_RAD_S;
     }
+#endif
     follow_status.state = LINE_FOLLOW_TRACKING;
     follow_status.linear_speed_mm_s = LINE_FOLLOW_FORWARD_SPEED_MM_S;
     follow_status.angular_speed_rad_s = angular_speed_rad_s;

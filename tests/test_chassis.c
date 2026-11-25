@@ -66,11 +66,11 @@ static void test_pwm_scaling(void) {
     assert(htim4.Instance->compare[0] == 0U);
     assert(htim4.Instance->compare[1] == 59U);
     bsp_motor_set_pwm(MOTOR_RIGHT, 1000);
-    assert(htim4.Instance->compare[2] == 0U);
-    assert(htim4.Instance->compare[3] == 100U);
-    bsp_motor_set_pwm(MOTOR_RIGHT, INT_MIN);
     assert(htim4.Instance->compare[2] == 100U);
     assert(htim4.Instance->compare[3] == 0U);
+    bsp_motor_set_pwm(MOTOR_RIGHT, INT_MIN);
+    assert(htim4.Instance->compare[2] == 0U);
+    assert(htim4.Instance->compare[3] == 100U);
     bsp_motor_set_pwm(MOTOR_LEFT, INT_MAX);
     assert(htim4.Instance->compare[0] == 100U);
     bsp_motor_set_pwm((motor_id_t)-1, 500);
@@ -96,10 +96,11 @@ static void test_pwm_scaling(void) {
 /** test_encoder_feedback：验证正反回绕、缓存读取和统一复位。参数：无。返回：无。 */
 static void test_encoder_feedback(void) {
     reset_fixture();
-    htim3.Instance->CNT = 65530U;
+    /* 左轮原始计数方向取反，两轮都从 5 向下回绕时，报告的方向相反。 */
+    htim3.Instance->CNT = 5U;
     htim2.Instance->CNT = 5U;
     assert(motor_speed_init());
-    htim3.Instance->CNT = 5U;
+    htim3.Instance->CNT = 65530U;
     htim2.Instance->CNT = 65530U;
     motor_speed_update(10U);
     motor_feedback_t left_feedback;
@@ -109,11 +110,12 @@ static void test_encoder_feedback(void) {
     assert(left_feedback.delta_counts == 11);
     assert(right_feedback.delta_counts == -11);
     assert(left_feedback.total_counts == 11);
-    assert_close(left_feedback.raw_speed_mm_s, 224.399475f);
-    assert_close(left_feedback.filtered_speed_mm_s, 67.319843f);
+    float expected_speed_mm_s = 11.0f * MOTOR_DISTANCE_PER_COUNT_MM / 0.01f;
+    assert_close(left_feedback.raw_speed_mm_s, expected_speed_mm_s);
+    assert_close(left_feedback.filtered_speed_mm_s, 0.3f * expected_speed_mm_s);
 
     /* 重复查询反馈不得消费计数；dt=0 也不得丢掉尚未采样的增量。 */
-    htim3.Instance->CNT = 7U;
+    htim3.Instance->CNT = 65528U;
     assert(motor_speed_get_feedback(MOTOR_LEFT, &left_feedback));
     motor_speed_update(0U);
     assert(motor_speed_get_feedback(MOTOR_LEFT, &left_feedback));
@@ -133,9 +135,10 @@ static void test_encoder_feedback(void) {
     assert(motor_speed_get_feedback(MOTOR_LEFT, &left_feedback));
     assert(left_feedback.total_counts == 0);
     assert_close(left_feedback.filtered_speed_mm_s, 0.0f);
-    htim3.Instance->CNT = 1640U; /* 1540 个计数对应半径 50mm 的一圈。 */
+    htim3.Instance->CNT = 1640U; /* 左轮原始计数增加 1540，反馈为反向一圈。 */
     motor_speed_update(1000U);
-    assert_close(motor_speed_get_distance_mm(MOTOR_LEFT), 314.159271f);
+    assert_close(motor_speed_get_distance_mm(MOTOR_LEFT),
+                 -2.0f * 3.14159265f * MOTOR_WHEEL_RADIUS_MM);
 }
 
 /** test_chassis_motion：验证斜坡、差速、等比限幅与两种停止行为。参数：无。返回：无。 */
@@ -146,38 +149,38 @@ static void test_chassis_motion(void) {
     chassis_set_velocity(600.0f, 0.0f);
     chassis_update(0U);
     assert_stopped();
-    chassis_update(10U); /* 指令从 0 增到 60mm/s，输出 262 千分比，CCR=26。 */
-    assert(htim4.Instance->compare[0] == 26U);
-    assert(htim4.Instance->compare[3] == 26U);
-    chassis_update(10U);
+    chassis_update(10U); /* 指令从 0 增到 60mm/s，输出 343 千分比，CCR=34。 */
     assert(htim4.Instance->compare[0] == 34U);
+    assert(htim4.Instance->compare[2] == 34U);
+    chassis_update(10U);
+    assert(htim4.Instance->compare[0] == 42U);
     chassis_request_stop();
     chassis_update(10U);
-    assert(htim4.Instance->compare[0] == 26U);
+    assert(htim4.Instance->compare[0] == 34U);
     chassis_update(10U);
     assert_stopped();
 
     chassis_set_velocity(300.0f, 0.0f);
     chassis_update(100U);
-    assert(htim4.Instance->compare[0] == 59U);
+    assert(htim4.Instance->compare[0] == 64U);
     chassis_stop();
     assert_stopped();
     chassis_update(100U);
     assert_stopped();
 
-    /* omega=2rad/s、轮距150mm：左轮 -150mm/s，右轮 +150mm/s。 */
+    /* 角速度 2rad/s、轮距 234mm，左右轮目标分别为 -234 和 +234mm/s。 */
     chassis_set_velocity(0.0f, 2.0f);
     chassis_update(100U);
     assert(htim4.Instance->compare[0] == 0U);
-    assert(htim4.Instance->compare[1] == 39U);
-    assert(htim4.Instance->compare[2] == 0U);
-    assert(htim4.Instance->compare[3] == 39U);
+    assert(htim4.Instance->compare[1] == 56U);
+    assert(htim4.Instance->compare[2] == 56U);
+    assert(htim4.Instance->compare[3] == 0U);
 
     chassis_stop();
     chassis_set_wheel_speeds(1200.0f, 600.0f);
     chassis_update(100U);
     assert(htim4.Instance->compare[0] == 100U);
-    assert(htim4.Instance->compare[3] == 59U);
+    assert(htim4.Instance->compare[2] == 64U);
     chassis_set_velocity(NAN, 0.0f);
     assert_stopped();
     chassis_update(100U);
@@ -190,8 +193,8 @@ static void test_chassis_motion(void) {
 /** test_controller_and_initialization：验证开环接口边界及启动失败零输出。参数：无。返回：无。 */
 static void test_controller_and_initialization(void) {
     reset_fixture();
-    assert(app_motor_control_step(MOTOR_LEFT, 300.0f, 0.0f, 0.01f) == 590);
-    assert(app_motor_control_step(MOTOR_LEFT, -300.0f, 100.0f, 0.01f) == -590);
+    assert(app_motor_control_step(MOTOR_LEFT, 300.0f, 0.0f, 0.01f) == 635);
+    assert(app_motor_control_step(MOTOR_LEFT, -300.0f, 100.0f, 0.01f) == -635);
     assert(app_motor_control_step(MOTOR_LEFT, 0.0f, 100.0f, 0.01f) == 0);
     assert(app_motor_control_step(MOTOR_LEFT, 1000.0f, 0.0f, 0.01f) == 1000);
     assert(app_motor_control_step(MOTOR_LEFT, 300.0f, 0.0f, 0.0f) == 0);

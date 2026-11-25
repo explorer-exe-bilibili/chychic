@@ -28,5 +28,13 @@
 #ifndef LINE_FOLLOW_MAX_ANGULAR_SPEED_RAD_S
 #define LINE_FOLLOW_MAX_ANGULAR_SPEED_RAD_S 1.2f /* 转向角速度限幅，弧度/秒。 */
 #endif
+/*
+ * 循迹整定时，可定义 LINE_FOLLOW_STEERING_PID_GAINS，使用带 .kp、.ki、.kd 的
+ * pid_gains_t 初始化列表。误差为传感器位置偏差，输出为弧度/秒。
+ * 该宏未定义时，沿用 LINE_FOLLOW_STEERING_KP_RAD_S 的比例转向。
+ */
+#ifndef LINE_FOLLOW_STEERING_PID_GAINS
+#define LINE_FOLLOW_STEERING_PID_GAINS { .kp = 0.0f, .ki = 0.0f, .kd = 0.0f }
+#endif
 
 #endif

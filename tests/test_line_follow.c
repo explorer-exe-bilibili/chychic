@@ -136,7 +136,7 @@ static void test_start_stop_and_manual_mode(void) {
     assert(get_status().state == LINE_FOLLOW_TRACKING);
     assert_close(get_status().linear_speed_mm_s, 120.0f);
     assert_close(get_status().angular_speed_rad_s, 0.0f);
-    assert(htim4.Instance->compare[0] == htim4.Instance->compare[3]);
+    assert(htim4.Instance->compare[0] == htim4.Instance->compare[2]);
     assert(htim4.Instance->compare[0] > 0U);
 
     app_line_follow_stop();
@@ -174,10 +174,10 @@ static void test_all_patterns(void) {
         assert(fabsf(status.angular_speed_rad_s) <= LINE_FOLLOW_MAX_ANGULAR_SPEED_RAD_S);
         if (expected_errors[pattern_index] > 0.0f) {
             assert(status.angular_speed_rad_s > 0.0f);
-            assert(htim4.Instance->compare[3] > htim4.Instance->compare[0]);
+            assert(htim4.Instance->compare[2] > htim4.Instance->compare[0]);
         } else if (expected_errors[pattern_index] < 0.0f) {
             assert(status.angular_speed_rad_s < 0.0f);
-            assert(htim4.Instance->compare[0] > htim4.Instance->compare[3]);
+            assert(htim4.Instance->compare[0] > htim4.Instance->compare[2]);
         } else {
             assert_close(status.angular_speed_rad_s, 0.0f);
         }
@@ -246,7 +246,7 @@ static void test_debounce_reacquisition_and_sampling(void) {
     confirm_line();
     assert(get_status().state == LINE_FOLLOW_TRACKING);
 
-    htim3.Instance->CNT += 10U;
+    htim3.Instance->CNT = 65526U; /* 左轮计数向下回绕，方向修正后为 +10。 */
     app_line_follow_update(10U);
     motor_feedback_t feedback;
     assert(motor_speed_get_feedback(MOTOR_LEFT, &feedback));

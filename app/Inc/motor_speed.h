@@ -9,7 +9,7 @@ typedef struct {
     int32_t delta_counts;      /* 本次采样计数增量。 */
     int64_t total_counts;      /* 自初始化或复位后的累计计数。 */
     float raw_speed_mm_s;      /* 未滤波轮速，毫米/秒。 */
-    float filtered_speed_mm_s; /* 低通滤波轮速，毫米/秒，预留给速度 PID。 */
+    float filtered_speed_mm_s; /* 提供给轮速 PID 的低通滤波轮速，毫米/秒。 */
 } motor_feedback_t;
 
 /** motor_speed_init：启动编码器并清零反馈。成功为 true。 */
