@@ -160,12 +160,52 @@ static void test_steering_pid(void) {
     assert_close(steering_tick(10U).angular_speed_rad_s, -0.21f);
 }
 
+/** 验证在线调参只修改目标轮，清除该轮历史，并能上报斜坡后的双轮目标。 */
+static void test_online_wheel_pid(void) {
+    reset_fixture();
+    assert(app_motor_control_step(MOTOR_LEFT, 100.0f, 20.0f, 0.1f) == 584);
+
+    const pid_gains_t gains = {.kp = 1.0f, .ki = 2.0f, .kd = 1.0f};
+    pid_gains_t right_default;
+    assert(app_motor_get_speed_pid(MOTOR_RIGHT, &right_default));
+    assert(app_motor_set_speed_pid(MOTOR_LEFT, &gains));
+    pid_gains_t active;
+    assert(app_motor_get_speed_pid(MOTOR_LEFT, &active));
+    assert_close(active.kp, 1.0f);
+    assert_close(active.ki, 2.0f);
+    assert_close(active.kd, 1.0f);
+    assert(app_motor_get_speed_pid(MOTOR_RIGHT, &active));
+    assert_close(active.kp, right_default.kp);
+    assert_close(active.ki, right_default.ki);
+    assert_close(active.kd, right_default.kd);
+
+    assert(app_motor_control_step(MOTOR_LEFT, 100.0f, 50.0f, 0.1f) == 452);
+    assert(app_motor_set_speed_pid(MOTOR_LEFT, &gains));
+    assert(app_motor_control_step(MOTOR_LEFT, 100.0f, 50.0f, 0.1f) == 462);
+    const pid_gains_t invalid = {.kp = -1.0f, .ki = NAN, .kd = INFINITY};
+    assert(!app_motor_set_speed_pid(MOTOR_LEFT, &invalid));
+    assert(app_motor_control_step(MOTOR_LEFT, 100.0f, 50.0f, 0.1f) == 472);
+
+    float left_mm_s;
+    float right_mm_s;
+    chassis_set_wheel_speeds(100.0f, 40.0f);
+    chassis_update(10U);
+    chassis_get_wheel_targets(&left_mm_s, &right_mm_s);
+    assert_close(left_mm_s, 60.0f);
+    assert_close(right_mm_s, 40.0f);
+    chassis_stop();
+    chassis_get_wheel_targets(&left_mm_s, &right_mm_s);
+    assert_close(left_mm_s, 0.0f);
+    assert_close(right_mm_s, 0.0f);
+}
+
 /** main：运行已配置增益的控制测试。参数：无。返回：成功为 0。 */
 int main(void) {
     test_pid_terms();
     test_wheel_pid();
     test_encoder_to_pwm();
     test_steering_pid();
+    test_online_wheel_pid();
     puts("PASS: PID terms, anti-windup, wheel feedback, and line steering");
     return 0;
 }

@@ -13,7 +13,7 @@
 /*
  * 轮速整定时，可分别定义 MOTOR_LEFT_SPEED_PID_GAINS 和 MOTOR_RIGHT_SPEED_PID_GAINS，
  * 使用带 .kp、.ki、.kd 的 pid_gains_t 初始化列表。误差单位为毫米/秒，输出为 PWM 千分比。
- * 对应宏未定义时，沿用开环映射。
+ * 默认增益用于上电初始化；运行中可通过 UART1 修改，全零时只使用开环前馈。
  */
 
 #ifndef MOTOR_LEFT_SPEED_PID_GAINS

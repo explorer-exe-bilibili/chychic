@@ -32,6 +32,19 @@ static void put_u32(uint8_t *p, uint32_t value)
     p[3] = (uint8_t)(value);
 }
 
+/** 将 value 写入 p 指向的两个字节，高字节在前。 */
+static void put_u16(uint8_t *p, uint16_t value)
+{
+    p[0] = (uint8_t)(value >> 8);
+    p[1] = (uint8_t)value;
+}
+
+/** 读取 p 指向的大端无符号 16 位值。 */
+static uint16_t get_u16(const uint8_t *p)
+{
+    return (uint16_t)((uint16_t)p[0] << 8) | p[1];
+}
+
 static void put_i32(uint8_t *p, int32_t value)
 {
     put_u32(p, (uint32_t)value);
@@ -80,25 +93,61 @@ static void dispatch_frame(proto_t *p)
 {
     switch (p->cmd) {
     case CMD_VEL:
-        if (p->len == 8u && p->cb.on_vel != NULL) {
+        if (p->len != 8u) {
+            return;
+        }
+        if (p->cb.on_vel != NULL) {
             p->cb.on_vel(get_f32(&p->payload[0]), get_f32(&p->payload[4]));
         }
         break;
     case CMD_MODE:
-        if (p->len == 1u && p->cb.on_mode != NULL) {
+        if (p->len != 1u) {
+            return;
+        }
+        if (p->cb.on_mode != NULL) {
             p->cb.on_mode(p->payload[0]);
         }
         break;
     case CMD_ESTOP:
+        if (p->len != 0u) {
+            return;
+        }
         if (p->cb.on_estop != NULL) {
             p->cb.on_estop();
         }
         break;
     case CMD_PING:
-        /* 心跳包没有载荷，也不回调；收到即刷新看门狗 */
+        if (p->len != 0u) {
+            return;
+        }
+        break;
+    case CMD_LIFT_SET_ZERO:
+    case CMD_LIFT_STOP:
+        if (p->len != 0u) {
+            return;
+        }
+        if (p->cb.on_lift_command != NULL) {
+            p->cb.on_lift_command(p->cmd, 0.0f, 0u);
+        }
+        break;
+    case CMD_LIFT_MOVE:
+        if (p->len != 2u) {
+            return;
+        }
+        if (p->cb.on_lift_command != NULL) {
+            p->cb.on_lift_command(p->cmd, 0.0f, get_u16(p->payload));
+        }
+        break;
+    case CMD_LIFT_CONFIG:
+        if (p->len != 6u) {
+            return;
+        }
+        if (p->cb.on_lift_command != NULL) {
+            p->cb.on_lift_command(p->cmd, get_f32(p->payload), get_u16(&p->payload[4]));
+        }
         break;
     default:
-        break;
+        return;
     }
     p->rx_frames++;
 }
@@ -229,6 +278,29 @@ uint16_t proto_build_state(uint8_t *out, uint8_t seq, uint32_t tick_ms, uint8_t 
     out[40] = status;            /* 35 */
 
     return finish_frame(out, 41u);
+}
+
+uint16_t proto_build_lift_state(uint8_t *out, uint8_t seq, uint32_t tick_ms,
+                               const lift_status_t *lift, uint8_t last_cmd, uint8_t last_cmd_seq,
+                               lift_command_result_t result)
+{
+    out[0] = PROTO_SOF1;
+    out[1] = PROTO_SOF2;
+    out[2] = seq;
+    out[3] = FB_LIFT_STATE;
+    out[4] = FB_LIFT_STATE_LEN;
+    put_u32(&out[5], tick_ms);
+    put_f32(&out[9], lift->position_mm);
+    put_u16(&out[13], lift->target_mm);
+    put_i32(&out[15], lift->encoder_count);
+    out[19] = (uint8_t)lift->state;
+    out[20] = (uint8_t)lift->fault;
+    out[21] = (lift->configured ? LIFT_FLAG_CONFIGURED : 0u) |
+              (lift->referenced ? LIFT_FLAG_REFERENCED : 0u);
+    out[22] = last_cmd;
+    out[23] = last_cmd_seq;
+    out[24] = (uint8_t)result;
+    return finish_frame(out, 5u + FB_LIFT_STATE_LEN);
 }
 
 uint16_t proto_build_ack(uint8_t *out, uint8_t seq, uint8_t acked_cmd)

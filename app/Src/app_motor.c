@@ -26,25 +26,10 @@ typedef struct {
 /* wheel_speed_controllers：按电机编号保存互相独立的控制状态。 */
 static wheel_speed_controller_t wheel_speed_controllers[MOTOR_COUNT];
 
-#ifdef MOTOR_LEFT_SPEED_PID_GAINS
-static const pid_gains_t left_speed_pid_gains = MOTOR_LEFT_SPEED_PID_GAINS; /* 左轮增益。 */
-#endif
-#ifdef MOTOR_RIGHT_SPEED_PID_GAINS
-static const pid_gains_t right_speed_pid_gains = MOTOR_RIGHT_SPEED_PID_GAINS; /* 右轮增益。 */
-#endif
-
-/* wheel_speed_pid_gains：各轮的可选增益，空指针表示使用开环映射。 */
-static const pid_gains_t *const wheel_speed_pid_gains[MOTOR_COUNT] = {
-#ifdef MOTOR_LEFT_SPEED_PID_GAINS
-    [MOTOR_LEFT] = &left_speed_pid_gains,
-#else
-    [MOTOR_LEFT] = NULL,
-#endif
-#ifdef MOTOR_RIGHT_SPEED_PID_GAINS
-    [MOTOR_RIGHT] = &right_speed_pid_gains,
-#else
-    [MOTOR_RIGHT] = NULL,
-#endif
+/* 可在线调整，初值由底盘配置提供；全零时只输出前馈。 */
+static pid_gains_t wheel_speed_pid_gains[MOTOR_COUNT] = {
+    [MOTOR_LEFT] = MOTOR_LEFT_SPEED_PID_GAINS,
+    [MOTOR_RIGHT] = MOTOR_RIGHT_SPEED_PID_GAINS,
 };
 
 /** wheel_speed_reset_all：清除双轮 PID 历史和方向。参数：无。返回：无。 */
@@ -57,6 +42,30 @@ static void wheel_speed_reset_all(void) {
 bool app_motor_init(void) {
     wheel_speed_reset_all();
     return bsp_motor_init();
+}
+
+bool app_motor_get_speed_pid(motor_id_t motor_id, pid_gains_t *gains) {
+    if ((unsigned int)motor_id >= MOTOR_COUNT || gains == NULL) {
+        return false;
+    }
+    *gains = wheel_speed_pid_gains[motor_id];
+    return true;
+}
+
+bool app_motor_set_speed_pid(motor_id_t motor_id, const pid_gains_t *gains) {
+    if ((unsigned int)motor_id >= MOTOR_COUNT || gains == NULL || !isfinite(gains->kp) ||
+        !isfinite(gains->ki) || !isfinite(gains->kd) || gains->kp < 0.0f || gains->ki < 0.0f ||
+        gains->kd < 0.0f) {
+        return false;
+    }
+
+    pid_gains_t *current_gains = &wheel_speed_pid_gains[motor_id];
+    if (gains->kp != current_gains->kp || gains->ki != current_gains->ki ||
+        gains->kd != current_gains->kd) {
+        *current_gains = *gains;
+        wheel_speed_controllers[motor_id] = (wheel_speed_controller_t){0};
+    }
+    return true;
 }
 
 int32_t app_motor_control_step(motor_id_t motor_id, float target_speed_mm_s,
@@ -84,10 +93,7 @@ int32_t app_motor_control_step(motor_id_t motor_id, float target_speed_mm_s,
                                           speed_magnitude_mm_s / CHASSIS_MAX_WHEEL_SPEED_MM_S +
                                       0.5f);
     feedforward_permille *= target_direction;
-    const pid_gains_t *gains = wheel_speed_pid_gains[motor_id];
-    if (gains == NULL) {
-        return feedforward_permille;
-    }
+    const pid_gains_t *gains = &wheel_speed_pid_gains[motor_id];
 
     if (controller->target_direction != target_direction) {
         pid_reset(&controller->pid);

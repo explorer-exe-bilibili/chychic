@@ -28,6 +28,7 @@
 #include "chassis.h"
 #include "app_line_follow.h"
 #include "app_comm.h"
+#include "app_lift.h"
 #include "chassis_config.h"
 #include "gettick.h"
 #include "bsp_motor.h"
@@ -99,8 +100,13 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM4_Init();
   MX_USART1_UART_Init();
+  MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
   if (!chassis_init())
+  {
+    Error_Handler();
+  }
+  if (!app_lift_init())
   {
     Error_Handler();
   }
@@ -131,6 +137,7 @@ chassis_set_velocity(0.0f, 0.0f);
       last_control_tick_ms = current_tick_ms;
       /* 先跑看门狗与遥测：上位机失联则此处已把模式切回 IDLE 并停车 */
       app_comm_update(elapsed_ms);
+      app_lift_update(current_tick_ms);
       /* 先由循迹模块设置目标，再统一测速、推进斜坡并输出电机 PWM。 */
       app_line_follow_update(elapsed_ms);
       chassis_update(elapsed_ms);

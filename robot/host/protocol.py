@@ -22,10 +22,15 @@ CMD_VEL = 0x10
 CMD_MODE = 0x11
 CMD_ESTOP = 0x12
 CMD_PING = 0x13
+CMD_LIFT_SET_ZERO = 0x14
+CMD_LIFT_MOVE = 0x15
+CMD_LIFT_STOP = 0x16
+CMD_LIFT_CONFIG = 0x17
 
 # --- 下位机 -> 上位机 -------------------------------------------------------
 FB_STATE = 0x80
 FB_ACK = 0x81
+FB_LIFT_STATE = 0x82
 
 # --- mode ------------------------------------------------------------------
 # 语义对应 MCU 的 app_line_follow / chassis 接口：
@@ -56,6 +61,12 @@ ST_STALL = 1 << 4
 _STATE_FMT = ">IBBBfffffiiB"
 _STATE_SIZE = struct.calcsize(_STATE_FMT)
 assert _STATE_SIZE == 36, _STATE_SIZE
+
+_LIFT_STATE_FMT = ">IfHiBBBBBB"
+_LIFT_STATE_SIZE = struct.calcsize(_LIFT_STATE_FMT)
+assert _LIFT_STATE_SIZE == 20, _LIFT_STATE_SIZE
+LIFT_FLAG_CONFIGURED = 1 << 0
+LIFT_FLAG_REFERENCED = 1 << 1
 
 #: 循迹状态，对应 MCU 的 line_follow_state_t
 LF_DISABLED = 0
@@ -115,6 +126,52 @@ def encode_ping(seq: int = 0) -> bytes:
 def encode_vel_mm(v_mm_s: float, w_rad_s: float, seq: int = 0) -> bytes:
     """车速指令。单位 mm/s + rad/s，和 MCU 的 chassis_set_velocity 一致。"""
     return encode(CMD_VEL, struct.pack(">ff", v_mm_s, w_rad_s), seq)
+
+
+def encode_lift_config(counts_per_mm: float, max_height_mm: int, seq: int = 0) -> bytes:
+    return encode(CMD_LIFT_CONFIG, struct.pack(">fH", counts_per_mm, max_height_mm), seq)
+
+
+def encode_lift_set_zero(seq: int = 0) -> bytes:
+    return encode(CMD_LIFT_SET_ZERO, b"", seq)
+
+
+def encode_lift_move(target_mm: int, seq: int = 0) -> bytes:
+    return encode(CMD_LIFT_MOVE, struct.pack(">H", target_mm), seq)
+
+
+def encode_lift_stop(seq: int = 0) -> bytes:
+    return encode(CMD_LIFT_STOP, b"", seq)
+
+
+@dataclass(frozen=True)
+class LiftState:
+    """丝杆反馈。referenced 为真时，position_mm 表示相对手动零点的高度。"""
+
+    tick_ms: int
+    position_mm: float
+    target_mm: int
+    encoder_count: int
+    state: int
+    fault: int
+    flags: int
+    last_cmd: int
+    last_cmd_seq: int
+    result: int
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.flags & LIFT_FLAG_CONFIGURED)
+
+    @property
+    def referenced(self) -> bool:
+        return bool(self.flags & LIFT_FLAG_REFERENCED)
+
+
+def parse_lift_state(payload: bytes) -> LiftState | None:
+    if len(payload) != _LIFT_STATE_SIZE:
+        return None
+    return LiftState(*struct.unpack(_LIFT_STATE_FMT, payload))
 
 
 @dataclass(frozen=True)
