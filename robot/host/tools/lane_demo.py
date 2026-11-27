@@ -291,6 +291,8 @@ def main() -> int:
     ap.add_argument("--camera", type=int, default=None, help="摄像头编号")
     ap.add_argument("--video", default=None, help="视频文件")
     ap.add_argument("--v-cruise", type=float, default=0.30)
+    ap.add_argument("--fixed", action="store_true", help="改用固定阈值（默认自适应）")
+    ap.add_argument("--threshold", type=int, default=90, help="固定阈值（未开自适应时生效）")
     ap.add_argument("--kp", type=float, default=1.30, help="循迹 P 增益")
     ap.add_argument("--kd", type=float, default=0.04, help="循迹 D 增益")
     ap.add_argument("--fps", type=int, default=30)
@@ -304,7 +306,7 @@ def main() -> int:
 
     follower = LineFollower(LineConfig(v_cruise=args.v_cruise,
                                        kp=args.kp, kd=args.kd))
-    detector = LineDetector()
+    detector = LineDetector(threshold=args.threshold, use_adaptive=not args.fixed)
 
     if args.synthetic:
         return run_synthetic(args, follower, detector)
