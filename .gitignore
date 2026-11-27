@@ -14,3 +14,7 @@ parts_table.txt
 .clangd
 .vscode/
 .settings/
+
+# Android 调试签名密钥，固定不变
+robot/android/btbridge/debug.keystore
+robot/android/btbridge/build/

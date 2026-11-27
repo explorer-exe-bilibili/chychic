@@ -86,6 +86,26 @@ class MCU:
         self.link.estop()
         self.mode = p.MODE_ESTOP
 
+    # -- 升降台 -------------------------------------------------------
+    @property
+    def lift(self):
+        """最近一帧升降台状态；没收到过则为 None。"""
+        return getattr(self.link, "lift", None)
+
+    def lift_move(self, target_mm: int) -> None:
+        """移动到指定高度（毫米）。未标定零点前 position 不可信。"""
+        self.link.send_raw(lambda s: p.encode_lift_move(target_mm, s))
+
+    def lift_stop(self) -> None:
+        self.link.send_raw(p.encode_lift_stop)
+
+    def lift_set_zero(self) -> None:
+        """把当前位置记作零点。换丝杆 / 换电机后必须重做。"""
+        self.link.send_raw(p.encode_lift_set_zero)
+
+    def lift_config(self, counts_per_mm: float, max_height_mm: int) -> None:
+        self.link.send_raw(lambda s: p.encode_lift_config(counts_per_mm, max_height_mm, s))
+
     # -- 查询 ---------------------------------------------------------
     @property
     def lf_state(self) -> int:

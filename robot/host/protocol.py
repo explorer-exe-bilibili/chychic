@@ -22,6 +22,10 @@ CMD_VEL = 0x10
 CMD_MODE = 0x11
 CMD_ESTOP = 0x12
 CMD_PING = 0x13
+CMD_LIFT_SET_ZERO = 0x14  # 空，当前位置设为零点
+CMD_LIFT_MOVE = 0x15      # <uint16 target_mm>
+CMD_LIFT_STOP = 0x16      # 空
+CMD_LIFT_CONFIG = 0x17    # <float32 counts_per_mm, uint16 max_height_mm>
 CMD_LIFT_SET_ZERO = 0x14
 CMD_LIFT_MOVE = 0x15
 CMD_LIFT_STOP = 0x16
@@ -30,6 +34,7 @@ CMD_LIFT_CONFIG = 0x17
 # --- 下位机 -> 上位机 -------------------------------------------------------
 FB_STATE = 0x80
 FB_ACK = 0x81
+FB_LIFT_STATE = 0x82
 FB_LIFT_STATE = 0x82
 
 # --- mode ------------------------------------------------------------------
@@ -300,3 +305,86 @@ def parse_state(payload: bytes) -> State | None:
     if len(payload) != _STATE_SIZE:
         return None
     return State(*struct.unpack(_STATE_FMT, payload))
+
+
+# ---- 丝杆升降台（FB_LIFT_STATE 0x82）--------------------------------------
+#: 布局：tick(u32) position_mm(f32) target_mm(u16) encoder(i32)
+#:       state(u8) fault(u8) flags(u8) last_cmd(u8) last_seq(u8) result(u8)
+_LIFT_FMT = ">IfHiBBBBBB"
+_LIFT_SIZE = struct.calcsize(_LIFT_FMT)
+assert _LIFT_SIZE == 20, _LIFT_SIZE
+
+LIFT_FLAG_CONFIGURED = 1 << 0
+LIFT_FLAG_REFERENCED = 1 << 1
+
+LIFT_STATE_CN = {
+    0: "空闲",
+    1: "运行中",
+    2: "到位",
+    3: "故障",
+}
+
+
+@dataclass(frozen=True)
+class LiftState:
+    """升降台状态。position_mm 为当前位置，target_mm 为当前目标。"""
+
+    tick_ms: int
+    position_mm: float
+    target_mm: int
+    encoder_count: int
+    state: int
+    fault: int
+    flags: int
+    last_cmd: int
+    last_cmd_seq: int
+    result: int
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.flags & LIFT_FLAG_CONFIGURED)
+
+    @property
+    def referenced(self) -> bool:
+        """是否已标定过零点。没标定的话 position_mm 不可信。"""
+        return bool(self.flags & LIFT_FLAG_REFERENCED)
+
+    @property
+    def state_name(self) -> str:
+        return LIFT_STATE_CN.get(self.state, f"未知({self.state})")
+
+    def describe(self) -> str:
+        return (
+            f"升降 {self.state_name:<3} pos={self.position_mm:+.1f}mm "
+            f"target={self.target_mm}mm enc={self.encoder_count} "
+            f"{'已标定' if self.referenced else '未标定'}"
+        )
+
+
+def parse_lift_state(payload: bytes) -> LiftState | None:
+    if len(payload) != _LIFT_SIZE:
+        return None
+    return LiftState(*struct.unpack(_LIFT_FMT, payload))
+
+
+def encode_lift_move(target_mm: int, seq: int = 0) -> bytes:
+    """把升降台移动到指定高度（毫米）。"""
+    value = max(0, min(0xFFFF, int(target_mm)))
+    return encode(CMD_LIFT_MOVE, struct.pack(">H", value), seq)
+
+
+def encode_lift_stop(seq: int = 0) -> bytes:
+    return encode(CMD_LIFT_STOP, b"", seq)
+
+
+def encode_lift_set_zero(seq: int = 0) -> bytes:
+    """把当前位置记作零点。换电机/换丝杆后必须重新做。"""
+    return encode(CMD_LIFT_SET_ZERO, b"", seq)
+
+
+def encode_lift_config(counts_per_mm: float, max_height_mm: int, seq: int = 0) -> bytes:
+    return encode(
+        CMD_LIFT_CONFIG,
+        struct.pack(">fH", counts_per_mm, max(0, min(0xFFFF, int(max_height_mm)))),
+        seq,
+    )

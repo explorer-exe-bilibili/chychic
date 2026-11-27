@@ -13,6 +13,7 @@ class Link(Protocol):
     def send_vel(self, v: float, w: float) -> None: ...
     def send_mode(self, mode: int) -> None: ...
     def send_ping(self) -> None: ...
+    def send_raw(self, builder) -> None: ...
     def estop(self) -> None: ...
     def poll(self) -> list[p.State]: ...
     def close(self) -> None: ...
@@ -32,12 +33,14 @@ class SerialLink:
         if hasattr(port, "write") and hasattr(port, "read_any"):
             self._ser = port
         else:
+            # serial_for_url 同时支持 /dev/ttyUSB0、socket://host:port 和 rfc2217://
             import serial  # 延迟导入，--sim 模式下不需要 pyserial
 
-            self._ser = serial.Serial(port, baud, timeout=0)
+            self._ser = serial.serial_for_url(port, baudrate=baud, timeout=0)
         self._dec = p.Decoder()
         self._seq = 0
         self._sent = 0
+        self.lift: p.LiftState | None = None
 
     def _next_seq(self) -> int:
         self._seq = (self._seq + 1) & 0xFF
@@ -54,6 +57,10 @@ class SerialLink:
     def send_ping(self) -> None:
         self._ser.write(p.encode_ping(self._next_seq()))
 
+    def send_raw(self, builder) -> None:
+        """发送任意帧。builder(seq) -> bytes，由 link 统一维护序号。"""
+        self._ser.write(builder(self._next_seq()))
+
     def estop(self) -> None:
         self._ser.write(p.encode_estop(self._next_seq()))
 
@@ -62,10 +69,10 @@ class SerialLink:
         if hasattr(self._ser, "read_any"):
             data = self._ser.read_any(256)
         else:
-            waiting = self._ser.in_waiting
-            if not waiting:
-                return []
-            data = self._ser.read(waiting)
+            # timeout=0 时 read 是非阻塞的，返回当前可读的全部字节。
+            # 不能用 in_waiting 判断：pyserial 的 socket:// 实现里它恒返回 1，
+            # 会把 43 字节的一帧拆成 43 次读取。
+            data = self._ser.read(4096)
         if not data:
             return []
         states: list[p.State] = []
@@ -74,6 +81,10 @@ class SerialLink:
                 st = p.parse_state(payload)
                 if st is not None:
                     states.append(st)
+            elif cmd == p.FB_LIFT_STATE:
+                lift = p.parse_lift_state(payload)
+                if lift is not None:
+                    self.lift = lift
         return states
 
     def close(self) -> None:
@@ -104,6 +115,7 @@ class SimLink:
         self.tpm = ticks_per_meter
         self._last = time.monotonic()
         self._status = p.ST_ENCODER
+        self.lift: p.LiftState | None = None
 
     def send_vel(self, v: float, w: float) -> None:
         self.v, self.w = v, w
@@ -112,6 +124,9 @@ class SimLink:
         self.mode = mode
 
     def send_ping(self) -> None:
+        pass
+
+    def send_raw(self, builder) -> None:
         pass
 
     def estop(self) -> None:
