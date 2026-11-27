@@ -9,25 +9,32 @@
  * 忙就丢弃这一帧——遥测少一帧无所谓，控制环不能被阻塞。
  */
 #include "app_comm.h"
+#include "app_comm_text.h"
 
+#include "app_lift.h"
 #include "app_line_follow.h"
+#include "app_motor.h"
 #include "chassis.h"
+#include "chassis_config.h"
 #include "gettick.h"
 #include "motor_speed.h"
 #include "motor_types.h"
 #include "protocol.h"
 
+#include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 /** 接收环形缓冲大小，字节。20Hz × 11 字节远小于此值，留足余量。 */
 #define APP_COMM_RX_BUF 128u
-/** 单帧最大长度：2 帧头 + 3 头 + 36 载荷 + 2 CRC */
-#define APP_COMM_TX_BUF 48u
+/* 容纳二进制反馈帧，或四条曲线的一组数据和一行文本应答。 */
+#define APP_COMM_TX_BUF 384u
 
 static UART_HandleTypeDef *s_huart;              /* 绑定的串口句柄 */
 static proto_t s_proto;                          /* 协议解析器 */
 static uint8_t s_rx_buf[APP_COMM_RX_BUF];        /* DMA 循环接收缓冲 */
-static uint16_t s_rx_tail;                       /* 主循环已解析到的位置 */
+static volatile uint16_t s_rx_tail;              /* 主循环已解析到的位置 */
+static volatile uint16_t s_it_rx_head;           /* 中断回退模式的接收写入位置 */
 static uint8_t s_tx_buf[APP_COMM_TX_BUF];        /* 遥测组帧缓冲 */
 static uint8_t s_tx_seq;                         /* 发送帧序号 */
 static bool s_dma_rx_ok;                         /* 循环 DMA 是否启动成功 */
@@ -43,6 +50,22 @@ static uint32_t s_tx_frames;                     /* 已发送帧数 */
 static uint32_t s_tx_dropped;                    /* 因串口忙而丢弃的帧数 */
 static uint32_t s_rx_overrun;                    /* 接收溢出次数，正常应为 0 */
 static uint32_t s_rx_errors;                     /* 串口错误回调触发次数 */
+
+static uint8_t s_last_lift_cmd;                  /* 最近处理的升降命令字 */
+static uint8_t s_last_lift_cmd_seq;              /* 最近处理的升降命令序号 */
+static lift_command_result_t s_lift_cmd_result;  /* 最近升降命令的执行结果 */
+
+typedef enum {
+    TEXT_REPLY_NONE = 0,
+    TEXT_REPLY_PLOT_ON,
+    TEXT_REPLY_PID,
+    TEXT_REPLY_INVALID,
+    TEXT_REPLY_ESTOP,
+} text_reply_t;
+
+static comm_text_rx_t s_text_rx;  /* 文本命令的分片接收状态。 */
+static bool s_plot_mode;         /* true 表示 UART1 使用文本遥测。 */
+static text_reply_t s_text_reply; /* 待发送的最近一条应答。 */
 
 /* ---- 内部：模式切换 ---------------------------------------------------- */
 
@@ -69,6 +92,7 @@ static void apply_mode(uint8_t mode)
         break;
 
     case MODE_ESTOP:
+        app_lift_stop(LIFT_FAULT_ESTOP);
         app_line_follow_stop();
         chassis_stop();
         s_status |= ST_ESTOP;
@@ -107,6 +131,9 @@ static void on_vel(float v_mm_s, float w_rad_s)
  */
 static void on_mode(uint8_t mode)
 {
+    if (s_mode == MODE_ESTOP && mode != MODE_IDLE) {
+        return;
+    }
     apply_mode(mode);
 }
 
@@ -121,13 +148,189 @@ static void on_estop(void)
     apply_mode(MODE_ESTOP);
 }
 
+/** 处理已校验的升降命令。cmd 为命令字；counts_per_mm 和 mm 为标定或定位参数。 */
+static void on_lift_command(uint8_t cmd, float counts_per_mm, uint16_t mm)
+{
+    s_last_lift_cmd = cmd;
+    s_last_lift_cmd_seq = s_proto.seq;
+
+    if (cmd == CMD_LIFT_MOVE && (s_status & ST_ESTOP) != 0u) {
+        s_lift_cmd_result = LIFT_COMMAND_ESTOP;
+        return;
+    }
+
+    switch (cmd) {
+    case CMD_LIFT_CONFIG:
+        s_lift_cmd_result = app_lift_configure(counts_per_mm, mm);
+        break;
+    case CMD_LIFT_SET_ZERO:
+        s_lift_cmd_result = app_lift_set_zero();
+        break;
+    case CMD_LIFT_MOVE:
+        s_lift_cmd_result = app_lift_move(mm, Get_tick());
+        break;
+    case CMD_LIFT_STOP:
+        app_lift_stop(LIFT_FAULT_NONE);
+        s_lift_cmd_result = LIFT_COMMAND_OK;
+        break;
+    default:
+        break;
+    }
+}
+
+/** 执行以文本结束符收齐的 line，返回命令是否有效。 */
+static bool on_text_command(char *line)
+{
+    comm_text_command_t command = app_comm_text_parse(line);
+    if (command.action == COMM_TEXT_PLOT_ON) {
+        s_plot_mode = true;
+        s_text_reply = TEXT_REPLY_PLOT_ON;
+        return true;
+    }
+    if (!s_plot_mode) {
+        return false;
+    }
+
+    switch (command.action) {
+    case COMM_TEXT_PLOT_OFF:
+        s_plot_mode = false;
+        s_text_reply = TEXT_REPLY_NONE;
+        return true;
+
+    case COMM_TEXT_PID_GET:
+        s_text_reply = TEXT_REPLY_PID;
+        return true;
+
+    case COMM_TEXT_PID_SET: {
+        bool applied;
+        if (command.wheel == MOTOR_COUNT) {
+            applied = app_motor_set_speed_pid(MOTOR_LEFT, &command.gains) &&
+                      app_motor_set_speed_pid(MOTOR_RIGHT, &command.gains);
+        } else {
+            applied = app_motor_set_speed_pid(command.wheel, &command.gains);
+        }
+        s_text_reply = applied ? TEXT_REPLY_PID : TEXT_REPLY_INVALID;
+        return applied;
+    }
+
+    case COMM_TEXT_SPEED:
+        if (s_mode == MODE_ESTOP) {
+            s_text_reply = TEXT_REPLY_ESTOP;
+            return false;
+        }
+        if (fabsf(command.speed_mm_s) > CHASSIS_MAX_WHEEL_SPEED_MM_S) {
+            s_text_reply = TEXT_REPLY_INVALID;
+            return false;
+        }
+        on_mode(MODE_MANUAL);
+        on_vel(command.speed_mm_s, 0.0f);
+        return true;
+
+    case COMM_TEXT_IDLE:
+        s_v_cmd = 0.0f;
+        s_w_cmd = 0.0f;
+        on_mode(MODE_IDLE);
+        return true;
+
+    case COMM_TEXT_ESTOP:
+        on_estop();
+        return true;
+
+    case COMM_TEXT_PING:
+        return true;
+
+    default:
+        s_text_reply = TEXT_REPLY_INVALID;
+        return false;
+    }
+}
+
+/** now_ms 为当前毫秒计数。链路超时后停止底盘和丝杆。 */
+static void update_watchdog(uint32_t now_ms)
+{
+    if ((uint32_t)(now_ms - s_last_rx_ms) <= APP_COMM_WATCHDOG_MS) {
+        return;
+    }
+
+    app_lift_stop(LIFT_FAULT_LINK_LOST);
+    if (s_mode != MODE_IDLE && s_mode != MODE_ESTOP) {
+        apply_mode(MODE_IDLE);
+    }
+    s_status |= ST_WATCHDOG;
+}
+
 /* ---- 内部：遥测 -------------------------------------------------------- */
 
 /**
- * send_telemetry：组一帧 FB_STATE 并通过 DMA 发出。
- * now_ms：当前毫秒计数。返回：无。
- * 串口忙则丢帧，不等待。
+ * 在发送缓冲中组帧。now_ms 为当前毫秒计数，feedback_left/right 为最近轮速反馈。
+ * 返回二进制反馈总长度，包含底盘状态和丝杆状态。
  */
+static uint16_t build_binary_telemetry(uint32_t now_ms, const motor_feedback_t *feedback_left,
+                                       const motor_feedback_t *feedback_right)
+{
+    line_follow_status_t line_status = {0};
+    (void)app_line_follow_get_status(&line_status);
+
+    /* 循迹模式下回报循迹模块的目标，手动模式下回报上位机下发的目标。 */
+    float v_cmd_mm_s = (s_mode == MODE_LINE_FOLLOW) ? line_status.linear_speed_mm_s : s_v_cmd;
+    float w_cmd_rad_s =
+        (s_mode == MODE_LINE_FOLLOW) ? line_status.angular_speed_rad_s : s_w_cmd;
+
+    uint16_t length =
+        proto_build_state(s_tx_buf, s_tx_seq++, now_ms, s_mode, (uint8_t)line_status.state,
+                          line_status.line_mask, line_status.position_error, v_cmd_mm_s,
+                          w_cmd_rad_s, feedback_left->filtered_speed_mm_s,
+                          feedback_right->filtered_speed_mm_s, (int32_t)feedback_left->total_counts,
+                          (int32_t)feedback_right->total_counts, s_status);
+
+    lift_status_t lift_status = app_lift_get_status();
+    return length + proto_build_lift_state(&s_tx_buf[length], s_tx_seq++, now_ms, &lift_status,
+                                            s_last_lift_cmd, s_last_lift_cmd_seq, s_lift_cmd_result);
+}
+
+/** feedback_left/right 为最近轮速反馈。返回一组曲线及待发应答的总字节数。 */
+static uint16_t build_plot_telemetry(const motor_feedback_t *feedback_left,
+                                     const motor_feedback_t *feedback_right)
+{
+    float left_target;
+    float right_target;
+    chassis_get_wheel_targets(&left_target, &right_target);
+    char *out = (char *)s_tx_buf;
+    size_t length = app_comm_text_plot(out, sizeof(s_tx_buf), left_target,
+                                        feedback_left->filtered_speed_mm_s, right_target,
+                                        feedback_right->filtered_speed_mm_s);
+    if (length == 0U || s_text_reply == TEXT_REPLY_NONE) {
+        return (uint16_t)length;
+    }
+
+    size_t remaining = sizeof(s_tx_buf) - length;
+    int reply_length;
+    if (s_text_reply == TEXT_REPLY_PID) {
+        pid_gains_t left = {0};
+        pid_gains_t right = {0};
+        (void)app_motor_get_speed_pid(MOTOR_LEFT, &left);
+        (void)app_motor_get_speed_pid(MOTOR_RIGHT, &right);
+        /* 括号内的参数不会被网页识别为绘图用的数值。 */
+        reply_length = snprintf(out + length, remaining,
+                                "OK PID left kp(%.9g) ki(%.9g) kd(%.9g) "
+                                "right kp(%.9g) ki(%.9g) kd(%.9g)\n",
+                                (double)left.kp, (double)left.ki, (double)left.kd,
+                                (double)right.kp, (double)right.ki, (double)right.kd);
+    } else {
+        static const char *const replies[] = {
+            [TEXT_REPLY_PLOT_ON] = "OK PLOT ON\n",
+            [TEXT_REPLY_INVALID] = "ERR INVALID COMMAND OR VALUE\n",
+            [TEXT_REPLY_ESTOP] = "ERR ESTOP SEND !idle#\n",
+        };
+        reply_length = snprintf(out + length, remaining, "%s", replies[s_text_reply]);
+    }
+    if (reply_length < 0 || (size_t)reply_length >= remaining) {
+        return 0;
+    }
+    return (uint16_t)(length + (size_t)reply_length);
+}
+
+/** now_ms 为当前毫秒计数。通过 DMA 发送到期的遥测，串口忙时跳过。 */
 static void send_telemetry(uint32_t now_ms)
 {
     if ((uint32_t)(now_ms - s_last_tx_ms) < APP_COMM_TELEMETRY_MS) {
@@ -140,31 +343,15 @@ static void send_telemetry(uint32_t now_ms)
         return;
     }
 
-    line_follow_status_t line_status;
-    memset(&line_status, 0, sizeof(line_status));
-    (void)app_line_follow_get_status(&line_status);
-
-    motor_feedback_t feedback_left;
-    motor_feedback_t feedback_right;
-    memset(&feedback_left, 0, sizeof(feedback_left));
-    memset(&feedback_right, 0, sizeof(feedback_right));
+    motor_feedback_t feedback_left = {0};
+    motor_feedback_t feedback_right = {0};
     (void)motor_speed_get_feedback(MOTOR_LEFT, &feedback_left);
     (void)motor_speed_get_feedback(MOTOR_RIGHT, &feedback_right);
-
-    /* 循迹模式下回报循迹模块的目标，手动模式下回报上位机下发的目标 */
-    float v_cmd_mm_s = (s_mode == MODE_LINE_FOLLOW) ? line_status.linear_speed_mm_s : s_v_cmd;
-    float w_cmd_rad_s =
-        (s_mode == MODE_LINE_FOLLOW) ? line_status.angular_speed_rad_s : s_w_cmd;
-
-    uint16_t length =
-        proto_build_state(s_tx_buf, s_tx_seq++, now_ms, s_mode, (uint8_t)line_status.state,
-                          line_status.line_mask, line_status.position_error, v_cmd_mm_s,
-                          w_cmd_rad_s, feedback_left.filtered_speed_mm_s,
-                          feedback_right.filtered_speed_mm_s, (int32_t)feedback_left.total_counts,
-                          (int32_t)feedback_right.total_counts, s_status);
-
-    if (HAL_UART_Transmit_DMA(s_huart, s_tx_buf, length) == HAL_OK) {
+    uint16_t length = s_plot_mode ? build_plot_telemetry(&feedback_left, &feedback_right)
+                                  : build_binary_telemetry(now_ms, &feedback_left, &feedback_right);
+    if (length > 0U && HAL_UART_Transmit_DMA(s_huart, s_tx_buf, length) == HAL_OK) {
         s_tx_frames++;
+        s_text_reply = TEXT_REPLY_NONE;
     } else {
         s_tx_dropped++;
     }
@@ -175,8 +362,15 @@ static void send_telemetry(uint32_t now_ms)
 void app_comm_init(UART_HandleTypeDef *huart)
 {
     s_huart = huart;
+    s_text_rx = (comm_text_rx_t){0};
+    s_plot_mode = false;
+    s_text_reply = TEXT_REPLY_NONE;
     s_rx_tail = 0;
+    s_it_rx_head = 0;
     s_tx_seq = 0;
+    s_last_lift_cmd = 0;
+    s_last_lift_cmd_seq = 0;
+    s_lift_cmd_result = LIFT_COMMAND_OK;
     s_mode = MODE_IDLE;
     s_status = ST_ENCODER;
     s_v_cmd = 0.0f;
@@ -184,7 +378,12 @@ void app_comm_init(UART_HandleTypeDef *huart)
     s_tx_frames = 0;
     s_tx_dropped = 0;
 
-    proto_cb_t callbacks = {on_vel, on_mode, on_estop};
+    proto_cb_t callbacks = {
+        .on_vel = on_vel,
+        .on_mode = on_mode,
+        .on_estop = on_estop,
+        .on_lift_command = on_lift_command,
+    };
     proto_init(&s_proto, &callbacks);
 
     uint32_t now_ms = Get_tick();
@@ -210,21 +409,34 @@ void app_comm_poll(void)
         return;
     }
 
+    /* 先处理已经发生的断联，再消费新到的帧。 */
+    update_watchdog(Get_tick());
     uint32_t frames_before = s_proto.rx_frames;
+    bool valid_text_command = false;
 
+    uint16_t head = s_it_rx_head;
     if (s_dma_rx_ok && s_huart->hdmarx != NULL) {
         /* CNDTR 递减，剩余越少说明写入越多 */
         uint16_t remain = (uint16_t)__HAL_DMA_GET_COUNTER(s_huart->hdmarx);
-        uint16_t head = (uint16_t)((APP_COMM_RX_BUF - remain) % APP_COMM_RX_BUF);
+        head = (uint16_t)((APP_COMM_RX_BUF - remain) % APP_COMM_RX_BUF);
+    }
 
-        while (s_rx_tail != head) {
-            proto_feed(&s_proto, s_rx_buf[s_rx_tail]);
-            s_rx_tail = (uint16_t)((s_rx_tail + 1u) % APP_COMM_RX_BUF);
+    while (s_rx_tail != head) {
+        uint8_t byte = s_rx_buf[s_rx_tail];
+        s_rx_tail = (uint16_t)((s_rx_tail + 1u) % APP_COMM_RX_BUF);
+
+        char *line;
+        if (app_comm_text_feed(&s_text_rx, byte, s_proto.state == PS_SOF1, &line)) {
+            if (line != NULL && on_text_command(line)) {
+                valid_text_command = true;
+            }
+        } else {
+            proto_feed(&s_proto, byte);
         }
     }
 
-    /* 任何合法帧（包括 PING）都算链路存活 */
-    if (s_proto.rx_frames != frames_before) {
+    /* 有效的二进制帧和文本命令都可维持链路。 */
+    if (valid_text_command || s_proto.rx_frames != frames_before) {
         s_last_rx_ms = Get_tick();
         s_status &= (uint8_t)~ST_WATCHDOG;
     }
@@ -245,13 +457,7 @@ void app_comm_update(uint32_t dt_ms)
 
     uint32_t now_ms = Get_tick();
 
-    /* 链路看门狗：上位机挂了就停车，不留下没人管的自主小车 */
-    if ((uint32_t)(now_ms - s_last_rx_ms) > APP_COMM_WATCHDOG_MS) {
-        if (s_mode != MODE_IDLE) {
-            apply_mode(MODE_IDLE);
-        }
-        s_status |= ST_WATCHDOG;
-    }
+    update_watchdog(now_ms);
 
     send_telemetry(now_ms);
 }
@@ -292,9 +498,12 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
         return;
     }
 
-    proto_feed(&s_proto, s_it_byte);
-    s_last_rx_ms = Get_tick();
-    s_status &= (uint8_t)~ST_WATCHDOG;
+    /* 回调只排队；DMA 和中断回退都在主循环解析，避免在 ISR 里改升降状态。 */
+    uint16_t next_head = (uint16_t)((s_it_rx_head + 1u) % APP_COMM_RX_BUF);
+    if (next_head != s_rx_tail) {
+        s_rx_buf[s_it_rx_head] = s_it_byte;
+        s_it_rx_head = next_head;
+    }
     (void)HAL_UART_Receive_IT(huart, &s_it_byte, 1);
 }
 
@@ -316,10 +525,9 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
     s_rx_errors++;
     huart->ErrorCode = HAL_UART_ERROR_NONE;
 
-    /* DMA 环形缓冲已经停了，从头重启；已解析位置一并归零 */
-    s_rx_tail = 0;
-
     if (s_dma_rx_ok) {
+        /* DMA 环形缓冲从头重启；已解析位置一并归零。 */
+        s_rx_tail = 0;
         __HAL_UART_CLEAR_OREFLAG(huart);
         (void)HAL_UART_Receive_DMA(huart, s_rx_buf, APP_COMM_RX_BUF);
     } else {

@@ -2,11 +2,19 @@
 #define APP_MOTOR_H
 
 #include "motor_types.h"
+#include "pid.h"
 #include <stdbool.h>
 #include <stdint.h>
 
 /** app_motor_init：启动电机输出层。参数：无。返回：成功为 true。 */
 bool app_motor_init(void);
+
+/**
+ * 读写单轮运行中的 PID 增益。motor_id 为轮编号，gains 为读写缓冲。
+ * 写入仅接受有限非负的增益，修改后清除该轮的积分和误差历史。返回是否成功。
+ */
+bool app_motor_get_speed_pid(motor_id_t motor_id, pid_gains_t *gains);
+bool app_motor_set_speed_pid(motor_id_t motor_id, const pid_gains_t *gains);
 
 /**
  * app_motor_control_step：计算带死区补偿的 PWM，配置轮速 PID 时叠加闭环修正。

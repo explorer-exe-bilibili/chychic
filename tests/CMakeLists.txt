@@ -51,3 +51,18 @@ target_compile_definitions(pid_control_tests PRIVATE
     "LINE_FOLLOW_STEERING_PID_GAINS={.kp=0.2f,.ki=1.0f,.kd=0.06f}")
 target_link_libraries(pid_control_tests PRIVATE m)
 add_test(NAME pid_control_tests COMMAND pid_control_tests)
+
+add_executable(lift_control_tests test_lift.c ../app/Src/app_lift.c ../app/Src/protocol.c)
+target_include_directories(lift_control_tests PRIVATE ../app/Inc ../bsp/Inc)
+target_compile_options(lift_control_tests PRIVATE -Wall -Wextra -Werror -Wmissing-prototypes -UNDEBUG)
+target_link_libraries(lift_control_tests PRIVATE m)
+add_test(NAME lift_control_tests COMMAND lift_control_tests)
+
+add_executable(comm_text_tests
+    test_comm_text.c
+    ../app/Src/app_comm_text.c
+    ../app/Src/protocol.c)
+target_include_directories(comm_text_tests PRIVATE ../app/Inc ../bsp/Inc)
+target_compile_options(comm_text_tests PRIVATE -Wall -Wextra -Werror -Wmissing-prototypes -UNDEBUG)
+target_link_libraries(comm_text_tests PRIVATE m)
+add_test(NAME comm_text_tests COMMAND comm_text_tests)

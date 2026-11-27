@@ -54,7 +54,10 @@ add_executable(${CMAKE_PROJECT_NAME}
         app/Src/app_line_follow.c
         app/Inc/app_line_follow.h
         app/Inc/line_follow_config.h
+        app/Src/app_lift.c
+        bsp/Src/bsp_lift.c
         app/Src/app_comm.c
+        app/Src/app_comm_text.c
         app/Inc/app_comm.h
         app/Src/protocol.c
         app/Inc/protocol.h)
@@ -86,6 +89,9 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Remove wrong libob.a library dependency when using cpp files
 list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
+
+# Enable float formatting in newlib-nano for the UART plot and PID readback.
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "LINKER:-u,_printf_float")
 
 # Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}

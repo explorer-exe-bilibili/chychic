@@ -30,6 +30,12 @@ void chassis_set_velocity(float linear_speed_mm_s, float angular_speed_rad_s);
 void chassis_update(uint32_t dt_ms);
 
 /**
+ * chassis_get_wheel_targets：读取上次控制周期传入轮速 PID 的斜坡目标。
+ * left_mm_s/right_mm_s：非空输出指针，单位毫米/秒。返回：无。
+ */
+void chassis_get_wheel_targets(float *left_mm_s, float *right_mm_s);
+
+/**
  * chassis_request_stop：将目标设为零，通过后续 update 按斜坡减速。
  * 参数：无。返回：无。此接口不表示电机驱动芯片的主动刹车模式。
  */

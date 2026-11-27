@@ -11,6 +11,8 @@
 #ifndef APP_PROTOCOL_H
 #define APP_PROTOCOL_H
 
+#include "app_lift.h"
+
 #include <stdint.h>
 
 #define PROTO_SOF1 0xAAu
@@ -23,9 +25,19 @@
 #define CMD_ESTOP 0x12u /* 空 */
 #define CMD_PING 0x13u  /* 空；上位机 20Hz 常发，用于喂看门狗 */
 
+#define CMD_LIFT_SET_ZERO 0x14u /* 空，当前位置设零 */
+#define CMD_LIFT_MOVE 0x15u     /* <uint16 target_mm> */
+#define CMD_LIFT_STOP 0x16u     /* 空，停止升降 */
+#define CMD_LIFT_CONFIG 0x17u   /* <float32 counts_per_mm, uint16 max_height_mm> */
+
 /* 下位机 -> 上位机 */
 #define FB_STATE 0x80u /* 36 字节状态 */
 #define FB_ACK 0x81u   /* <uint8 acked_cmd> */
+#define FB_LIFT_STATE 0x82u /* 升降状态，独立于 FB_STATE */
+
+/* FB_LIFT_STATE 的位置有效性标志。 */
+#define LIFT_FLAG_CONFIGURED (1u << 0)
+#define LIFT_FLAG_REFERENCED (1u << 1)
 
 /* 运行模式，与上位机的 MODE_* 一一对应 */
 #define MODE_IDLE 0u        /* 电机断使能，可手推 */
@@ -42,6 +54,7 @@
 
 /** FB_STATE 的 payload 长度，必须和上位机 struct ">IBBBfffffiiB" 一致 */
 #define FB_STATE_LEN 36u
+#define FB_LIFT_STATE_LEN 20u
 
 /** proto_cb_t：解析出完整帧后的回调集合；任一成员可为 NULL。 */
 typedef struct {
@@ -51,6 +64,8 @@ typedef struct {
     void (*on_mode)(uint8_t mode);
     /** on_estop：收到急停。 */
     void (*on_estop)(void);
+    /** cmd 为升降指令；counts_per_mm 仅供 CONFIG 使用，mm 为行程上限或目标高度。 */
+    void (*on_lift_command)(uint8_t cmd, float counts_per_mm, uint16_t mm);
 } proto_cb_t;
 
 /** proto_state_t：逐字节解析器的当前状态。 */
@@ -112,6 +127,13 @@ uint16_t proto_build_state(uint8_t *out, uint8_t seq, uint32_t tick_ms, uint8_t 
  * 返回：写入的字节数（固定 8）。
  */
 uint16_t proto_build_ack(uint8_t *out, uint8_t seq, uint8_t acked_cmd);
+
+/** 把升降状态写入 out（至少 27 字节），返回帧长。
+ * seq 为反馈帧序号，tick_ms 为毫秒计数，lift 为状态快照。
+ * last_cmd、last_cmd_seq 和 result 分别是最近一条指令的命令字、序号和执行结果。 */
+uint16_t proto_build_lift_state(uint8_t *out, uint8_t seq, uint32_t tick_ms,
+                               const lift_status_t *lift, uint8_t last_cmd, uint8_t last_cmd_seq,
+                               lift_command_result_t result);
 
 /**
  * proto_crc16：计算 CRC-16/CCITT-FALSE。

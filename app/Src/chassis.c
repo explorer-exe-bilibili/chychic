@@ -77,6 +77,11 @@ void chassis_update(uint32_t dt_ms) {
     app_motor_update(ramped_wheel_speed_mm_s[MOTOR_LEFT], ramped_wheel_speed_mm_s[MOTOR_RIGHT],dt_ms);
 }
 
+void chassis_get_wheel_targets(float *left_mm_s, float *right_mm_s) {
+    *left_mm_s = ramped_wheel_speed_mm_s[MOTOR_LEFT];
+    *right_mm_s = ramped_wheel_speed_mm_s[MOTOR_RIGHT];
+}
+
 void chassis_request_stop(void) {
     chassis_set_wheel_speeds(0.0f, 0.0f);
 }
