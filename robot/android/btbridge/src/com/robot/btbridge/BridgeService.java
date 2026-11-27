@@ -388,9 +388,28 @@ public class BridgeService extends Service {
         }
     }
 
-    /** BLE -> TCP */
+    /** BLE -> TCP，同时在本地解析一份供界面画波形 */
+    private final Proto.Decoder decoder = new Proto.Decoder();
+
     private void onBtData(byte[] value) {
         if (value == null || value.length == 0) return;
+
+        // 本地解析（不影响转发，纯旁路）
+        try {
+            for (Proto.Frame f : decoder.feed(value, value.length)) {
+                if (f.cmd == Proto.FB_STATE) {
+                    Proto.State s = Proto.parseState(f.payload);
+                    if (s != null) LiveData.push(s);
+                } else if (f.cmd == Proto.FB_LIFT_STATE) {
+                    Proto.LiftState l = Proto.parseLift(f.payload);
+                    if (l != null) LiveData.latestLift = l;
+                }
+            }
+            LiveData.bleFrames = decoder.frames;
+            LiveData.bleCrcErrors = decoder.crcErrors;
+        } catch (Exception ignored) {
+        }
+
         OutputStream o = tcpOut;
         if (o == null) return;
         try {
